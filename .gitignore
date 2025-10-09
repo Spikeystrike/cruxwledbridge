@@ -1,0 +1,7 @@
+config.py
+# Ignore compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.db
+.vscode/
