@@ -5,6 +5,7 @@ This small python script is a quick and dirty Crux App to WLED Bridge. The workf
 To get the bridge running, i recommend to use a proxy for authenticating all urls but https://<bridge>/viewed. 
 you can build the container by building the docker file. i would recommend to mount the config.py and app.db:
 here a example docker-compose setup (without authenticaiton):
+```
 services:
   bwall:
     build: ./cruxledbridge
@@ -14,7 +15,7 @@ services:
     volumes:
       - ./app.db:/code/app.db
       - ./config.py:/code/app/config.py
-
+```
 after that you can startup your container and access it under https://<bridge> 
 
 ## Setup Bridge
