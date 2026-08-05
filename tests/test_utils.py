@@ -444,7 +444,52 @@ class DefineHoldsTests(unittest.TestCase):
         self.assertEqual(saved_creation.settings["excluded_position_ids"], [1])
         self.assertEqual(saved_creation.settings["led_start_corner"], "bottom_left")
         self.assertEqual(saved_creation.settings["led_direction"], "vertical")
+        self.assertEqual(saved_creation.settings["coordinate_space"], "wall_image")
         db.close()
+
+    def test_hold_at_excluded_position_is_not_moved_to_active_position(self):
+        db = main.SessionLocal()
+        wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
+        wall.holds = [
+            {"id": "excluded-hold", "mask": [[10, 10], [10, 10]]},
+            {"id": "active-hold", "mask": [[20, 0], [20, 0]]},
+        ]
+        db.commit()
+        db.close()
+
+        payload = main.WallTranslation(
+            wallid=self.wall_id,
+            p1x=0,
+            p1y=0,
+            p2x=20,
+            p2y=0,
+            p3x=20,
+            p3y=10,
+            p4x=0,
+            p4y=10,
+            r=2,
+            c=3,
+            alternating=True,
+            alternating_start_column=0,
+            excluded_position_ids=[1],
+        )
+
+        result = asyncio.run(main.define_holds(payload))
+
+        self.assertEqual(result["holds2led"], {"active-hold": 1})
+
+        db = main.SessionLocal()
+        mappings = {
+            mapping.holdid: mapping.ledid
+            for mapping in db.query(main.Hold2ledDB).filter(
+                main.Hold2ledDB.holdid.like(f"{self.wall_id}_%")
+            )
+        }
+        db.close()
+        self.assertEqual(
+            mappings,
+            {f"{self.wall_id}_active-hold": 1},
+        )
 
     def test_saving_replaces_stale_hold_mappings_for_the_wall(self):
         db = main.SessionLocal()
@@ -597,18 +642,45 @@ class PathPrefixTests(unittest.TestCase):
 
     def test_wall_selector_maps_display_pixels_to_original_image_pixels(self):
         html = main.returnwallhtml(
-            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            {
+                "id": 216943,
+                "image_url": "https://example.com/wall.jpg",
+                "image_width": 200,
+                "image_height": 400,
+            },
             "/cruxwledbridge",
         )
 
         self.assertIn("function displayToImage(x, y)", html)
-        self.assertIn("x * climbingImage.naturalWidth / rect.width", html)
-        self.assertIn("y * climbingImage.naturalHeight / rect.height", html)
+        self.assertIn("const wallImageWidth = 200", html)
+        self.assertIn("const wallImageHeight = 400", html)
+        self.assertIn("x * coordinateWidth() / rect.width", html)
+        self.assertIn("y * coordinateHeight() / rect.height", html)
         self.assertIn("function imageToDisplay(point)", html)
-        self.assertIn("point.x * rect.width / climbingImage.naturalWidth", html)
+        self.assertIn("point.x * rect.width / coordinateWidth()", html)
         self.assertIn("points.push(displayToImage(x, y))", html)
         self.assertIn("const rect = climbingImage.getBoundingClientRect()", html)
         self.assertIn("window.addEventListener('resize'", html)
+
+    def test_wall_selector_migrates_saved_natural_image_coordinates(self):
+        html = main.returnwallhtml(
+            {
+                "id": 216943,
+                "image_url": "https://example.com/wall.jpg",
+                "image_width": 200,
+                "image_height": 400,
+            },
+            "/cruxwledbridge",
+            {
+                "points": [{"x": 100, "y": 200}],
+                "positions": {0: [100, 200]},
+            },
+        )
+
+        self.assertIn("savedCreation.coordinate_space === 'wall_image'", html)
+        self.assertIn("wallImageWidth / climbingImage.naturalWidth", html)
+        self.assertIn("wallImageHeight / climbingImage.naturalHeight", html)
+        self.assertIn("normalizeSavedCreationCoordinates();", html)
 
     def test_wall_selector_restores_saved_creation(self):
         saved_creation = {

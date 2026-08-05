@@ -3,6 +3,8 @@ import json
 
 def returnwallhtml(wall, path_prefix="", saved_creation=None):
     saved_creation_json = json.dumps(saved_creation or {}, separators=(",", ":"))
+    wall_image_width_json = json.dumps(wall.get("image_width"))
+    wall_image_height_json = json.dumps(wall.get("image_height"))
     html_content = f"""
         
         <!DOCTYPE html>
@@ -158,6 +160,8 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 const ledStartCornerSelect = document.getElementById('led-start-corner');
                 const ledDirectionSelect = document.getElementById('led-direction');
                 const savedCreation = {saved_creation_json};
+                const wallImageWidth = {wall_image_width_json};
+                const wallImageHeight = {wall_image_height_json};
                 let points = savedCreation.points || [];
                 let renderedPositions = savedCreation.positions || null;
                 let positionLedIds = savedCreation.position_led_ids || {{}};
@@ -170,20 +174,52 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     alternatingStart.disabled = !alternatingCheckbox.checked;
                 }});
 
+                function coordinateWidth() {{
+                    return wallImageWidth || climbingImage.naturalWidth;
+                }}
+
+                function coordinateHeight() {{
+                    return wallImageHeight || climbingImage.naturalHeight;
+                }}
+
                 function imageToDisplay(point) {{
                     const rect = climbingImage.getBoundingClientRect();
                     return {{
-                        x: point.x * rect.width / climbingImage.naturalWidth,
-                        y: point.y * rect.height / climbingImage.naturalHeight,
+                        x: point.x * rect.width / coordinateWidth(),
+                        y: point.y * rect.height / coordinateHeight(),
                     }};
                 }}
 
                 function displayToImage(x, y) {{
                     const rect = climbingImage.getBoundingClientRect();
                     return {{
-                        x: Math.round(x * climbingImage.naturalWidth / rect.width),
-                        y: Math.round(y * climbingImage.naturalHeight / rect.height),
+                        x: Math.round(x * coordinateWidth() / rect.width),
+                        y: Math.round(y * coordinateHeight() / rect.height),
                     }};
+                }}
+
+                function normalizeSavedCreationCoordinates() {{
+                    if (savedCreation.coordinate_space === 'wall_image') return;
+                    if (!wallImageWidth || !wallImageHeight) return;
+                    if (!climbingImage.naturalWidth || !climbingImage.naturalHeight) return;
+
+                    const scaleX = wallImageWidth / climbingImage.naturalWidth;
+                    const scaleY = wallImageHeight / climbingImage.naturalHeight;
+                    points = points.map(point => ({{
+                        x: Math.round(point.x * scaleX),
+                        y: Math.round(point.y * scaleY),
+                    }}));
+                    if (renderedPositions) {{
+                        renderedPositions = Object.fromEntries(
+                            Object.entries(renderedPositions).map(([positionId, point]) => [
+                                positionId,
+                                [
+                                    Math.round(point[0] * scaleX),
+                                    Math.round(point[1] * scaleY),
+                                ],
+                            ])
+                        );
+                    }}
                 }}
 
                 function renderGrid() {{
@@ -275,6 +311,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 }}
 
                 function initializeSavedCreation() {{
+                    normalizeSavedCreationCoordinates();
                     if (savedCreation.r !== undefined) rows.value = savedCreation.r;
                     if (savedCreation.c !== undefined) columns.value = savedCreation.c;
                     alternatingCheckbox.checked = Boolean(savedCreation.alternating);

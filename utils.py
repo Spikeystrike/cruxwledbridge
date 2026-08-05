@@ -126,18 +126,27 @@ def generate_grid(
     return grid
 
 
-def ledCalculation(lr, ll, ur, ul, c, r, holds, grid):
+def ledCalculation(holds, full_grid, position_led_ids):
     holds2led = {}
     for hold in holds:
         # calculate center
         mask_points = np.array(hold["mask"])
         center = np.mean(mask_points, axis=0).astype(int)  # Compute the center (x, y)
-        
-        # Find the nearest grid point
-        nearest_grid_id = min(grid, key=lambda gid: np.linalg.norm(np.array(grid[gid]) - center))
 
-        # Map the hold ID to the nearest grid ID
-        holds2led[hold["id"]] = nearest_grid_id
+        # Match against every physical grid position first. Otherwise a hold at
+        # an excluded position would be moved to the nearest active position.
+        nearest_position_id = min(
+            full_grid,
+            key=lambda position_id: np.linalg.norm(
+                np.array(full_grid[position_id]) - center
+            ),
+        )
+
+        # Excluded positions are intentionally absent from position_led_ids.
+        # Active positions map to their contiguous logical hole ID.
+        logical_hole_id = position_led_ids.get(nearest_position_id)
+        if logical_hole_id is not None:
+            holds2led[hold["id"]] = logical_hole_id
     return holds2led
 
 

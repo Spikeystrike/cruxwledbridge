@@ -362,7 +362,11 @@ async def define_holds(payload: WallTranslation):
         db.close()
         raise HTTPException(status_code=400, detail="At least one grid position must remain active")
 
-    holds2led = ledCalculation(lr, ll, ur, ul, c, r, existing_wall.holds, grid )
+    holds2led = ledCalculation(
+        existing_wall.holds,
+        full_grid,
+        position_led_ids,
+    )
     db.query(Hold2ledDB).filter(
         Hold2ledDB.holdid.like(f"{payload.wallid}_%")
     ).delete(synchronize_session=False)
@@ -387,6 +391,7 @@ async def define_holds(payload: WallTranslation):
         "alternating_start_column": payload.alternating_start_column,
         "led_start_corner": payload.led_start_corner,
         "led_direction": payload.led_direction,
+        "coordinate_space": "wall_image",
         "excluded_position_ids": sorted(excluded_position_ids),
         "positions": full_grid,
         "position_led_ids": position_led_ids,
