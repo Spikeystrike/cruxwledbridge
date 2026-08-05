@@ -254,6 +254,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 let excludedPositionIds = new Set(savedCreation.excluded_position_ids || []);
                 let selectionDirty = false;
                 let lastGridSettings = null;
+                let savedCreationInitialized = false;
 
                 function t(key, replacements = {{}}) {{
                     return window.cruxI18n.t(key, replacements);
@@ -294,12 +295,18 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 }}
 
                 function normalizeSavedCreationCoordinates() {{
-                    if (savedCreation.coordinate_space === 'wall_image') return;
-                    if (!wallImageWidth || !wallImageHeight) return;
-                    if (!climbingImage.naturalWidth || !climbingImage.naturalHeight) return;
+                    const sourceWidth = savedCreation.coordinate_space === 'wall_image'
+                        ? (savedCreation.coordinate_width || wallImageWidth)
+                        : (savedCreation.coordinate_width || climbingImage.naturalWidth);
+                    const sourceHeight = savedCreation.coordinate_space === 'wall_image'
+                        ? (savedCreation.coordinate_height || wallImageHeight)
+                        : (savedCreation.coordinate_height || climbingImage.naturalHeight);
+                    const targetWidth = coordinateWidth();
+                    const targetHeight = coordinateHeight();
+                    if (!sourceWidth || !sourceHeight || !targetWidth || !targetHeight) return;
 
-                    const scaleX = wallImageWidth / climbingImage.naturalWidth;
-                    const scaleY = wallImageHeight / climbingImage.naturalHeight;
+                    const scaleX = targetWidth / sourceWidth;
+                    const scaleY = targetHeight / sourceHeight;
                     points = points.map(point => ({{
                         x: Math.round(point.x * scaleX),
                         y: Math.round(point.y * scaleY),
@@ -315,6 +322,9 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                             ])
                         );
                     }}
+                    savedCreation.coordinate_space = 'wall_image';
+                    savedCreation.coordinate_width = targetWidth;
+                    savedCreation.coordinate_height = targetHeight;
                 }}
 
                 function renderGrid() {{
@@ -432,6 +442,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     updateUI();
                     renderGrid();
                     updateGridStatus();
+                    savedCreationInitialized = true;
                 }}
 
                 imageContainer.addEventListener('click', (event) => {{
@@ -449,6 +460,15 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     renderGrid();
                     updateGridStatus();
                 }});
+
+                if ('ResizeObserver' in window) {{
+                    new ResizeObserver(() => {{
+                        if (!savedCreationInitialized) return;
+                        updateUI();
+                        renderGrid();
+                        updateGridStatus();
+                    }}).observe(climbingImage);
+                }}
 
                 window.addEventListener('crux-language-change', () => {{
                     updateSubmitButtonLabel();

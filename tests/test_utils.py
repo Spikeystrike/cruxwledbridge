@@ -611,6 +611,74 @@ class WallEndpointTests(unittest.TestCase):
             db.commit()
             db.close()
 
+    @patch("main.requests.get")
+    def test_wall_creation_preserves_coordinate_basis_across_image_refresh(self, get):
+        wall_id = 987652
+        old_wall = {
+            "id": wall_id,
+            "angle_adjustable": False,
+            "created_at": "2026-01-01",
+            "name": "Resized wall",
+            "updated_at": "2026-01-01",
+            "image_height": 400,
+            "image_width": 200,
+            "image_url": "https://example.com/old-wall.jpg",
+            "maximum_angle": 40,
+            "minimum_angle": 10,
+            "holds": [],
+        }
+        refreshed_wall = {
+            **old_wall,
+            "updated_at": "2026-01-02",
+            "image_height": 800,
+            "image_width": 400,
+            "image_url": "https://example.com/new-wall.jpg",
+        }
+        response = Mock()
+        response.text = json.dumps(refreshed_wall)
+        get.return_value = response
+        db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == wall_id
+        ).delete(synchronize_session=False)
+        db.query(main.WallDB).filter(main.WallDB.id == wall_id).delete()
+        db.add(main.WallDB(**old_wall))
+        db.add(main.WallCreationDB(
+            wallid=wall_id,
+            settings={
+                "coordinate_space": "wall_image",
+                "points": [{"x": 100, "y": 200}],
+                "positions": {"0": [100, 200]},
+            },
+        ))
+        db.commit()
+        db.close()
+
+        try:
+            result = asyncio.run(main.wall_creation(str(wall_id)))
+
+            html = result.body.decode()
+            self.assertIn('"coordinate_width":200', html)
+            self.assertIn('"coordinate_height":400', html)
+            self.assertIn("const wallImageWidth = 400", html)
+            self.assertIn("const wallImageHeight = 800", html)
+
+            db = main.SessionLocal()
+            saved = db.query(main.WallCreationDB).filter(
+                main.WallCreationDB.wallid == wall_id
+            ).one()
+            self.assertEqual(saved.settings["coordinate_width"], 200)
+            self.assertEqual(saved.settings["coordinate_height"], 400)
+            db.close()
+        finally:
+            db = main.SessionLocal()
+            db.query(main.WallCreationDB).filter(
+                main.WallCreationDB.wallid == wall_id
+            ).delete(synchronize_session=False)
+            db.query(main.WallDB).filter(main.WallDB.id == wall_id).delete()
+            db.commit()
+            db.close()
+
 
 class DefineHoldsTests(unittest.TestCase):
     wall_id = 987654
@@ -692,6 +760,8 @@ class DefineHoldsTests(unittest.TestCase):
         self.assertEqual(saved_creation.settings["led_start_corner"], "bottom_left")
         self.assertEqual(saved_creation.settings["led_direction"], "vertical")
         self.assertEqual(saved_creation.settings["coordinate_space"], "wall_image")
+        self.assertEqual(saved_creation.settings["coordinate_width"], 20)
+        self.assertEqual(saved_creation.settings["coordinate_height"], 10)
         db.close()
 
     def test_hold_at_excluded_position_is_not_moved_to_active_position(self):
@@ -987,9 +1057,44 @@ class PathPrefixTests(unittest.TestCase):
         )
 
         self.assertIn("savedCreation.coordinate_space === 'wall_image'", html)
-        self.assertIn("wallImageWidth / climbingImage.naturalWidth", html)
-        self.assertIn("wallImageHeight / climbingImage.naturalHeight", html)
+        self.assertIn("savedCreation.coordinate_width || climbingImage.naturalWidth", html)
+        self.assertIn("savedCreation.coordinate_height || climbingImage.naturalHeight", html)
+        self.assertIn("const scaleX = targetWidth / sourceWidth", html)
+        self.assertIn("const scaleY = targetHeight / sourceHeight", html)
         self.assertIn("normalizeSavedCreationCoordinates();", html)
+
+    def test_wall_selector_restores_against_saved_coordinate_dimensions(self):
+        html = main.returnwallhtml(
+            {
+                "id": 216943,
+                "image_url": "https://example.com/wall.jpg",
+                "image_width": 400,
+                "image_height": 800,
+            },
+            "/cruxwledbridge",
+            {
+                "coordinate_space": "wall_image",
+                "coordinate_width": 200,
+                "coordinate_height": 400,
+                "points": [{"x": 100, "y": 200}],
+                "positions": {0: [100, 200]},
+            },
+        )
+
+        self.assertIn('"coordinate_width":200,"coordinate_height":400', html)
+        self.assertIn("savedCreation.coordinate_width || wallImageWidth", html)
+        self.assertIn("savedCreation.coordinate_height || wallImageHeight", html)
+        self.assertIn("savedCreation.coordinate_width = targetWidth", html)
+        self.assertIn("savedCreation.coordinate_height = targetHeight", html)
+
+    def test_wall_selector_repositions_overlay_when_image_layout_changes(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+        )
+
+        self.assertIn("new ResizeObserver(() =>", html)
+        self.assertIn("if (!savedCreationInitialized) return", html)
+        self.assertIn(".observe(climbingImage)", html)
 
     def test_wall_selector_restores_saved_creation(self):
         saved_creation = {

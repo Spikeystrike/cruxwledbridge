@@ -553,6 +553,8 @@ async def wall_creation(id: str = ""):
         wall = json.loads(result.text)
         db = SessionLocal()
         existing_wall = db.query(WallDB).filter(WallDB.id == wall['id']).first()
+        previous_image_width = existing_wall.image_width if existing_wall else None
+        previous_image_height = existing_wall.image_height if existing_wall else None
 
         if existing_wall:
             # Update the existing wall
@@ -586,7 +588,16 @@ async def wall_creation(id: str = ""):
         saved_creation = db.query(WallCreationDB).filter(
             WallCreationDB.wallid == wall['id']
         ).first()
-        saved_settings = saved_creation.settings if saved_creation else None
+        saved_settings = dict(saved_creation.settings) if saved_creation else None
+        if saved_settings and saved_settings.get("coordinate_space") == "wall_image":
+            # Older wall-image mappings did not persist their coordinate dimensions.
+            # The WallDB values from before the Crux refresh are the best available
+            # reference for the image against which those coordinates were saved.
+            if not saved_settings.get("coordinate_width") and previous_image_width:
+                saved_settings["coordinate_width"] = previous_image_width
+            if not saved_settings.get("coordinate_height") and previous_image_height:
+                saved_settings["coordinate_height"] = previous_image_height
+            saved_creation.settings = saved_settings
 
         db.commit()  # Save changes to the database
         db.close()
@@ -687,6 +698,8 @@ async def define_holds(payload: WallTranslation):
         "led_start_corner": payload.led_start_corner,
         "led_direction": payload.led_direction,
         "coordinate_space": "wall_image",
+        "coordinate_width": existing_wall.image_width,
+        "coordinate_height": existing_wall.image_height,
         "excluded_position_ids": sorted(excluded_position_ids),
         "positions": full_grid,
         "position_led_ids": position_led_ids,
