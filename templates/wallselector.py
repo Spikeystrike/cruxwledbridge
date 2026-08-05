@@ -1,4 +1,8 @@
-def returnwallhtml(wall, path_prefix=""):
+import json
+
+
+def returnwallhtml(wall, path_prefix="", saved_creation=None):
+    saved_creation_json = json.dumps(saved_creation or {}, separators=(",", ":"))
     html_content = f"""
         
         <!DOCTYPE html>
@@ -149,11 +153,16 @@ def returnwallhtml(wall, path_prefix=""):
                 const statusDiv = document.getElementById('status');
                 const alternatingCheckbox = document.getElementById('alternating');
                 const alternatingStart = document.getElementById('alternating-start');
-                let points = [];
-                let renderedPositions = null;
-                let positionLedIds = {{}};
-                let renderedHolds2led = {{}};
-                let excludedPositionIds = new Set();
+                const rows = document.getElementById('rows');
+                const columns = document.getElementById('columns');
+                const ledStartCornerSelect = document.getElementById('led-start-corner');
+                const ledDirectionSelect = document.getElementById('led-direction');
+                const savedCreation = {saved_creation_json};
+                let points = savedCreation.points || [];
+                let renderedPositions = savedCreation.positions || null;
+                let positionLedIds = savedCreation.position_led_ids || {{}};
+                let renderedHolds2led = savedCreation.holds2led || {{}};
+                let excludedPositionIds = new Set(savedCreation.excluded_position_ids || []);
                 let selectionDirty = false;
                 let lastGridSettings = null;
 
@@ -253,6 +262,39 @@ def returnwallhtml(wall, path_prefix=""):
                     }}
                 }}
 
+                function currentGridSettings() {{
+                    return JSON.stringify({{
+                        points: points,
+                        r: parseInt(rows.value),
+                        c: parseInt(columns.value),
+                        alternating: alternatingCheckbox.checked,
+                        alternatingStartColumn: parseInt(alternatingStart.value),
+                        ledStartCorner: ledStartCornerSelect.value,
+                        ledDirection: ledDirectionSelect.value,
+                    }});
+                }}
+
+                function initializeSavedCreation() {{
+                    if (savedCreation.r !== undefined) rows.value = savedCreation.r;
+                    if (savedCreation.c !== undefined) columns.value = savedCreation.c;
+                    alternatingCheckbox.checked = Boolean(savedCreation.alternating);
+                    alternatingStart.value = savedCreation.alternating_start_column ?? 0;
+                    alternatingStart.disabled = !alternatingCheckbox.checked;
+                    if (savedCreation.led_start_corner) {{
+                        ledStartCornerSelect.value = savedCreation.led_start_corner;
+                    }}
+                    if (savedCreation.led_direction) {{
+                        ledDirectionSelect.value = savedCreation.led_direction;
+                    }}
+                    if (points.length === 4) {{
+                        lastGridSettings = currentGridSettings();
+                        submitBtn.textContent = 'Auswahl speichern';
+                    }}
+                    updateUI();
+                    renderGrid();
+                    updateGridStatus();
+                }}
+
                 imageContainer.addEventListener('click', (event) => {{
                     if (points.length < 4) {{
                         const rect = climbingImage.getBoundingClientRect();
@@ -300,15 +342,7 @@ def returnwallhtml(wall, path_prefix=""):
                         return;
                     }}
 
-                    const gridSettings = JSON.stringify({{
-                        points: points,
-                        r: r,
-                        c: c,
-                        alternating: alternating,
-                        alternatingStartColumn: alternatingStartColumn,
-                        ledStartCorner: ledStartCorner,
-                        ledDirection: ledDirection,
-                    }});
+                    const gridSettings = currentGridSettings();
                     if (lastGridSettings !== null && gridSettings !== lastGridSettings) {{
                         excludedPositionIds.clear();
                     }}
@@ -370,6 +404,12 @@ def returnwallhtml(wall, path_prefix=""):
                         alert(`Ein Fehler ist beim Senden aufgetreten: ${{error.message}}`);
                     }}
                 }});
+
+                if (climbingImage.complete && climbingImage.naturalWidth) {{
+                    initializeSavedCreation();
+                }} else {{
+                    climbingImage.addEventListener('load', initializeSavedCreation, {{ once: true }});
+                }}
             </script>
         </body>
         </html>

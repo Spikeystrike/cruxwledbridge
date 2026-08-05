@@ -46,6 +46,12 @@ class WallDB(Base):
     holds = Column(JSON, nullable=True)  # Store "holds" as JSON
     hold2led = Column(JSON, nullable=True)  # Store hold2led mapping as JSON
 
+class WallCreationDB(Base):
+    __tablename__ = "wall_creation_settings"
+
+    wallid = Column(Integer, ForeignKey("walls.id"), primary_key=True, index=True)
+    settings = Column(JSON, nullable=False)
+
 # SQLite engine and session setup
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////code/db/app.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -282,9 +288,14 @@ async def wall_creation(id: str = ""):
             )
             db.add(wall_db)
 
+        saved_creation = db.query(WallCreationDB).filter(
+            WallCreationDB.wallid == wall['id']
+        ).first()
+        saved_settings = saved_creation.settings if saved_creation else None
+
         db.commit()  # Save changes to the database
         db.close()
-        html_content = returnwallhtml(wall, APP_PATH_PREFIX)
+        html_content = returnwallhtml(wall, APP_PATH_PREFIX, saved_settings)
         return HTMLResponse(content=html_content)        
     else:
         raise HTTPException(status_code=400, detail="Please send a wall id")
@@ -305,6 +316,9 @@ async def define_holds(payload: WallTranslation):
     c = payload.c 
     r = payload.r
     existing_wall = db.query(WallDB).filter(WallDB.id == payload.wallid).first()
+    if existing_wall is None:
+        db.close()
+        raise HTTPException(status_code=404, detail="Wall not found")
     try:
         full_grid = generate_grid(
             ul,
@@ -349,19 +363,42 @@ async def define_holds(payload: WallTranslation):
         raise HTTPException(status_code=400, detail="At least one grid position must remain active")
 
     holds2led = ledCalculation(lr, ll, ur, ul, c, r, existing_wall.holds, grid )
+    db.query(Hold2ledDB).filter(
+        Hold2ledDB.holdid.like(f"{payload.wallid}_%")
+    ).delete(synchronize_session=False)
     for h in holds2led:
         hold_key = wall_hold_key(payload.wallid, h)
-        existing_hold = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold_key).first()
-        if existing_hold:
-            existing_hold.ledid = holds2led[h]
+        hold2db = Hold2ledDB(
+            holdid=hold_key,
+            ledid=holds2led[h]
+        )
+        db.add(hold2db)
 
-
-        else:
-            hold2db = Hold2ledDB(
-                holdid=hold_key,
-                ledid=holds2led[h]
-            )
-            db.add(hold2db)
+    saved_settings = {
+        "points": [
+            {"x": payload.p1x, "y": payload.p1y},
+            {"x": payload.p2x, "y": payload.p2y},
+            {"x": payload.p3x, "y": payload.p3y},
+            {"x": payload.p4x, "y": payload.p4y},
+        ],
+        "r": r,
+        "c": c,
+        "alternating": payload.alternating,
+        "alternating_start_column": payload.alternating_start_column,
+        "led_start_corner": payload.led_start_corner,
+        "led_direction": payload.led_direction,
+        "excluded_position_ids": sorted(excluded_position_ids),
+        "positions": full_grid,
+        "position_led_ids": position_led_ids,
+        "holds2led": holds2led,
+    }
+    saved_creation = db.query(WallCreationDB).filter(
+        WallCreationDB.wallid == payload.wallid
+    ).first()
+    if saved_creation:
+        saved_creation.settings = saved_settings
+    else:
+        db.add(WallCreationDB(wallid=payload.wallid, settings=saved_settings))
     db.commit()
     db.close()
 

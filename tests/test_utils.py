@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 import types
@@ -300,12 +301,78 @@ class WallEndpointTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 400)
 
+    @patch("main.requests.get")
+    def test_wall_creation_loads_saved_settings(self, get):
+        wall_id = 987653
+        wall = {
+            "id": wall_id,
+            "angle_adjustable": False,
+            "created_at": "2026-01-01",
+            "name": "Saved wall",
+            "updated_at": "2026-01-02",
+            "image_height": 400,
+            "image_width": 200,
+            "image_url": "https://example.com/wall.jpg",
+            "maximum_angle": 40,
+            "minimum_angle": 10,
+            "holds": [],
+        }
+        response = Mock()
+        response.text = json.dumps(wall)
+        get.return_value = response
+        db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == wall_id
+        ).delete(synchronize_session=False)
+        db.query(main.WallDB).filter(main.WallDB.id == wall_id).delete()
+        db.add(main.WallDB(**wall))
+        db.add(main.WallCreationDB(
+            wallid=wall_id,
+            settings={
+                "points": [
+                    {"x": 0, "y": 0}, {"x": 200, "y": 0},
+                    {"x": 200, "y": 400}, {"x": 0, "y": 400},
+                ],
+                "r": 18,
+                "c": 11,
+                "alternating": False,
+                "alternating_start_column": 0,
+                "led_start_corner": "top_right",
+                "led_direction": "vertical",
+                "excluded_position_ids": [3],
+                "positions": {"0": [200, 0]},
+                "position_led_ids": {"0": 0},
+                "holds2led": {},
+            },
+        ))
+        db.commit()
+        db.close()
+
+        try:
+            result = asyncio.run(main.wall_creation(str(wall_id)))
+
+            html = result.body.decode()
+            self.assertIn('"r":18,"c":11', html)
+            self.assertIn('"led_start_corner":"top_right"', html)
+            self.assertIn('"excluded_position_ids":[3]', html)
+        finally:
+            db = main.SessionLocal()
+            db.query(main.WallCreationDB).filter(
+                main.WallCreationDB.wallid == wall_id
+            ).delete(synchronize_session=False)
+            db.query(main.WallDB).filter(main.WallDB.id == wall_id).delete()
+            db.commit()
+            db.close()
+
 
 class DefineHoldsTests(unittest.TestCase):
     wall_id = 987654
 
     def setUp(self):
         db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
         db.query(main.Hold2ledDB).filter(
             main.Hold2ledDB.holdid.like(f"{self.wall_id}_%")
         ).delete(synchronize_session=False)
@@ -328,6 +395,9 @@ class DefineHoldsTests(unittest.TestCase):
 
     def tearDown(self):
         db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
         db.query(main.Hold2ledDB).filter(
             main.Hold2ledDB.holdid.like(f"{self.wall_id}_%")
         ).delete(synchronize_session=False)
@@ -366,6 +436,46 @@ class DefineHoldsTests(unittest.TestCase):
             main.Hold2ledDB.holdid == f"{self.wall_id}_hold-a"
         ).first()
         self.assertEqual(mapping.ledid, 0)
+        saved_creation = db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).one()
+        self.assertEqual(saved_creation.settings["r"], 2)
+        self.assertEqual(saved_creation.settings["c"], 3)
+        self.assertEqual(saved_creation.settings["excluded_position_ids"], [1])
+        self.assertEqual(saved_creation.settings["led_start_corner"], "bottom_left")
+        self.assertEqual(saved_creation.settings["led_direction"], "vertical")
+        db.close()
+
+    def test_saving_replaces_stale_hold_mappings_for_the_wall(self):
+        db = main.SessionLocal()
+        db.add(main.Hold2ledDB(
+            holdid=f"{self.wall_id}_removed-hold",
+            ledid=99,
+        ))
+        db.commit()
+        db.close()
+
+        payload = main.WallTranslation(
+            wallid=self.wall_id,
+            p1x=0,
+            p1y=0,
+            p2x=20,
+            p2y=0,
+            p3x=20,
+            p3y=10,
+            p4x=0,
+            p4y=10,
+            r=2,
+            c=3,
+        )
+
+        asyncio.run(main.define_holds(payload))
+
+        db = main.SessionLocal()
+        stale_mapping = db.query(main.Hold2ledDB).filter(
+            main.Hold2ledDB.holdid == f"{self.wall_id}_removed-hold"
+        ).first()
+        self.assertIsNone(stale_mapping)
         db.close()
 
     def test_top_right_vertical_layout_skips_excluded_positions_in_cable_order(self):
@@ -499,6 +609,39 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("points.push(displayToImage(x, y))", html)
         self.assertIn("const rect = climbingImage.getBoundingClientRect()", html)
         self.assertIn("window.addEventListener('resize'", html)
+
+    def test_wall_selector_restores_saved_creation(self):
+        saved_creation = {
+            "points": [
+                {"x": 10, "y": 20},
+                {"x": 190, "y": 20},
+                {"x": 190, "y": 380},
+                {"x": 10, "y": 380},
+            ],
+            "r": 18,
+            "c": 11,
+            "alternating": True,
+            "alternating_start_column": 1,
+            "led_start_corner": "top_right",
+            "led_direction": "vertical",
+            "excluded_position_ids": [2, 7],
+            "positions": {0: [190, 20], 1: [190, 40]},
+            "position_led_ids": {0: 0, 1: 1},
+            "holds2led": {"hold-a": 1},
+        }
+
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+            saved_creation,
+        )
+
+        self.assertIn('"r":18,"c":11,"alternating":true', html)
+        self.assertIn('"led_start_corner":"top_right"', html)
+        self.assertIn('let points = savedCreation.points || []', html)
+        self.assertIn('rows.value = savedCreation.r', html)
+        self.assertIn('excludedPositionIds = new Set(savedCreation.excluded_position_ids || [])', html)
+        self.assertIn("climbingImage.addEventListener('load', initializeSavedCreation", html)
 
 
 class WledTests(unittest.TestCase):
