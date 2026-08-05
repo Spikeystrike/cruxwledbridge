@@ -312,6 +312,8 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn('id="alternating"', html)
         self.assertIn("alternating: alternating", html)
         self.assertIn('id="alternating-start"', html)
+        self.assertIn('<option value="0">Nicht eingerückt</option>', html)
+        self.assertIn('<option value="1">Eingerückt</option>', html)
         self.assertIn("alternating_start_column: alternatingStartColumn", html)
 
     def test_wall_selector_can_exclude_rendered_positions(self):

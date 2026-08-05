@@ -113,8 +113,8 @@ def returnwallhtml(wall, path_prefix=""):
                 </label>
                 <label for="alternating-start">Oberste Reihe:</label>
                 <select id="alternating-start" name="alternating-start" disabled>
-                    <option value="0">5 cm, 25 cm, 45 cm, ...</option>
-                    <option value="1">15 cm, 35 cm, 55 cm, ...</option>
+                    <option value="0">Nicht eingerückt</option>
+                    <option value="1">Eingerückt</option>
                 </select>
             </div>
             <p>Beim alternierenden Raster ist C die Anzahl aller möglichen Spalten. C darf gerade oder ungerade sein; die verwendeten Spalten wechseln von Reihe zu Reihe.</p>
