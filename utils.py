@@ -44,11 +44,39 @@ def _turn_off(controller):
     )
 
 
-def generate_grid(lu, ru, rb, lb, r, c, alternating=False):
+def generate_grid(
+    lu,
+    ru,
+    rb,
+    lb,
+    r,
+    c,
+    alternating=False,
+    alternating_start_column=0,
+):
     if r < 1 or c < 1:
         raise ValueError("Grid rows and columns must be positive")
-    if alternating and (c < 2 or c % 2 != 0):
-        raise ValueError("Alternating grids require an even number of columns")
+    if alternating and c < 2:
+        raise ValueError("Alternating grids require at least two columns")
+    if alternating_start_column not in (0, 1):
+        raise ValueError("Alternating grid start column must be 0 or 1")
+
+    row_columns = []
+    for row_from_top in range(r):
+        if alternating:
+            first_column = (alternating_start_column + row_from_top) % 2
+            row_columns.append(list(range(first_column, c, 2)))
+        else:
+            row_columns.append(list(range(c)))
+
+    # With an odd number of possible columns, alternating rows contain different
+    # numbers of LEDs. Calculate each row's offset explicitly so the snake IDs
+    # still remain contiguous.
+    row_offsets = {}
+    next_led_id = 0
+    for row_from_top in reversed(range(r)):
+        row_offsets[row_from_top] = next_led_id
+        next_led_id += len(row_columns[row_from_top])
 
     grid = {}  # Dictionary zur Speicherung der Punkte, Schlüssel ist die ID
     # Interpolate die Positionen für alle Reihen (von links oben nach links unten und rechts oben nach rechts unten)
@@ -61,10 +89,10 @@ def generate_grid(lu, ru, rb, lb, r, c, alternating=False):
         # Reihe von unten gezählt (0-basiert)
         row_from_bottom = r - 1 - i
 
-        # Im alternierenden Raster verwendet die oberste Reihe die Spalten
-        # 0, 2, 4, ... und die nächste Reihe 1, 3, 5, ... . Bei z. B. 22
-        # möglichen Spalten bleiben so genau 11 Punkte pro Reihe übrig.
-        column_indices = range(i % 2, c, 2) if alternating else range(c)
+        # Im alternierenden Raster wechseln die verwendeten Spalten je Reihe.
+        # Bei ungeradem C darf sich deshalb die Anzahl aktiver Punkte je Reihe
+        # um eins unterscheiden.
+        column_indices = row_columns[i]
         active_columns = len(column_indices)
 
         # Interpolate die Punkte innerhalb der aktuellen Reihe (von links nach rechts)
@@ -75,12 +103,9 @@ def generate_grid(lu, ru, rb, lb, r, c, alternating=False):
 
             # Berechne die ID in "Schlangenlinien"-Form von unten
             if (row_from_bottom % 2) == 1:  # Ungerade Reihen von unten (1, 3, ...): von links nach rechts
-                led_id = (row_from_bottom * active_columns) + active_column
+                led_id = row_offsets[i] + active_column
             else:  # Gerade Reihen von unten (0, 2, ...): von rechts nach links
-                led_id = (
-                    row_from_bottom * active_columns
-                    + (active_columns - 1 - active_column)
-                )
+                led_id = row_offsets[i] + (active_columns - 1 - active_column)
             
             grid[led_id] = (point[0].item(), point[1].item())
     return grid

@@ -89,15 +89,58 @@ class GridGenerationTests(unittest.TestCase):
             },
         )
 
-    def test_alternating_grid_rejects_odd_column_count(self):
-        with self.assertRaisesRegex(ValueError, "even number of columns"):
+    def test_alternating_grid_allows_odd_column_count(self):
+        grid = utils.generate_grid(
+            (5, 0),
+            (45, 0),
+            (45, 10),
+            (5, 10),
+            2,
+            5,
+            alternating=True,
+        )
+
+        self.assertEqual(set(grid), set(range(5)))
+        self.assertEqual(
+            sorted(x for x, y in grid.values() if y == 0),
+            [5, 25, 45],
+        )
+        self.assertEqual(
+            sorted(x for x, y in grid.values() if y == 10),
+            [15, 35],
+        )
+
+    def test_alternating_grid_can_start_with_offset_row(self):
+        grid = utils.generate_grid(
+            (5, 0),
+            (45, 0),
+            (45, 10),
+            (5, 10),
+            2,
+            5,
+            alternating=True,
+            alternating_start_column=1,
+        )
+
+        self.assertEqual(set(grid), set(range(5)))
+        self.assertEqual(
+            sorted(x for x, y in grid.values() if y == 0),
+            [15, 35],
+        )
+        self.assertEqual(
+            sorted(x for x, y in grid.values() if y == 10),
+            [5, 25, 45],
+        )
+
+    def test_alternating_grid_rejects_single_column(self):
+        with self.assertRaisesRegex(ValueError, "at least two columns"):
             utils.generate_grid(
                 (0, 0),
-                (40, 0),
-                (40, 10),
+                (0, 0),
+                (0, 10),
                 (0, 10),
                 2,
-                5,
+                1,
                 alternating=True,
             )
 
@@ -174,6 +217,74 @@ class WallEndpointTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 400)
 
 
+class DefineHoldsTests(unittest.TestCase):
+    wall_id = 987654
+
+    def setUp(self):
+        db = main.SessionLocal()
+        db.query(main.Hold2ledDB).filter(
+            main.Hold2ledDB.holdid.like(f"{self.wall_id}_%")
+        ).delete(synchronize_session=False)
+        db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).delete()
+        db.add(
+            main.WallDB(
+                id=self.wall_id,
+                angle_adjustable=False,
+                created_at="2026-01-01",
+                name="Test wall",
+                updated_at="2026-01-01",
+                image_height=10,
+                image_width=20,
+                image_url="https://example.com/wall.jpg",
+                holds=[{"id": "hold-a", "mask": [[0, 0], [0, 0]]}],
+            )
+        )
+        db.commit()
+        db.close()
+
+    def tearDown(self):
+        db = main.SessionLocal()
+        db.query(main.Hold2ledDB).filter(
+            main.Hold2ledDB.holdid.like(f"{self.wall_id}_%")
+        ).delete(synchronize_session=False)
+        db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).delete()
+        db.commit()
+        db.close()
+
+    def test_excluded_position_is_not_used_for_mapping(self):
+        payload = main.WallTranslation(
+            wallid=self.wall_id,
+            p1x=0,
+            p1y=0,
+            p2x=20,
+            p2y=0,
+            p3x=20,
+            p3y=10,
+            p4x=0,
+            p4y=10,
+            r=2,
+            c=3,
+            alternating=True,
+            alternating_start_column=0,
+            excluded_position_ids=[1],
+        )
+
+        result = asyncio.run(main.define_holds(payload))
+
+        self.assertEqual(set(result["positions"]), {0, 1, 2})
+        self.assertEqual(set(result["grid"]), {0, 1})
+        self.assertEqual(result["position_led_ids"], {0: 0, 2: 1})
+        self.assertEqual(result["excluded_position_ids"], [1])
+        self.assertEqual(result["holds2led"], {"hold-a": 0})
+
+        db = main.SessionLocal()
+        mapping = db.query(main.Hold2ledDB).filter(
+            main.Hold2ledDB.holdid == f"{self.wall_id}_hold-a"
+        ).first()
+        self.assertEqual(mapping.ledid, 0)
+        db.close()
+
+
 class PathPrefixTests(unittest.TestCase):
     def test_normalizes_path_prefix(self):
         self.assertEqual(main.normalize_path_prefix("cruxwledbridge/"), "/cruxwledbridge")
@@ -200,6 +311,18 @@ class PathPrefixTests(unittest.TestCase):
 
         self.assertIn('id="alternating"', html)
         self.assertIn("alternating: alternating", html)
+        self.assertIn('id="alternating-start"', html)
+        self.assertIn("alternating_start_column: alternatingStartColumn", html)
+
+    def test_wall_selector_can_exclude_rendered_positions(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+        )
+
+        self.assertIn("excludedPositionIds.has(positionId)", html)
+        self.assertIn("excluded_position_ids: Array.from(excludedPositionIds)", html)
+        self.assertIn("Auswahl speichern", html)
 
 
 class WledTests(unittest.TestCase):

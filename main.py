@@ -6,7 +6,7 @@ from html import escape
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, logger
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Optional
 import json
 from utils import (
@@ -131,6 +131,8 @@ class WallTranslation(BaseModel):
     r: int 
     c: int
     alternating: bool = False
+    alternating_start_column: int = 0
+    excluded_position_ids: List[int] = Field(default_factory=list)
 class Climb(BaseModel):
     id: int
     wall_id: int
@@ -302,7 +304,7 @@ async def define_holds(payload: WallTranslation):
     r = payload.r
     existing_wall = db.query(WallDB).filter(WallDB.id == payload.wallid).first()
     try:
-        grid = generate_grid(
+        full_grid = generate_grid(
             ul,
             ur,
             lr,
@@ -310,10 +312,38 @@ async def define_holds(payload: WallTranslation):
             r,
             c,
             alternating=payload.alternating,
+            alternating_start_column=payload.alternating_start_column,
         )  # lu, ru, rb, lb
     except ValueError as exc:
         db.close()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    excluded_position_ids = set(payload.excluded_position_ids)
+    unknown_position_ids = excluded_position_ids.difference(full_grid)
+    if unknown_position_ids:
+        db.close()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown grid position IDs: {sorted(unknown_position_ids)}",
+        )
+
+    active_position_ids = [
+        position_id
+        for position_id in sorted(full_grid)
+        if position_id not in excluded_position_ids
+    ]
+    position_led_ids = {
+        position_id: led_id
+        for led_id, position_id in enumerate(active_position_ids)
+    }
+    grid = {
+        led_id: full_grid[position_id]
+        for position_id, led_id in position_led_ids.items()
+    }
+    if not grid:
+        db.close()
+        raise HTTPException(status_code=400, detail="At least one grid position must remain active")
+
     holds2led = ledCalculation(lr, ll, ur, ul, c, r, existing_wall.holds, grid )
     for h in holds2led:
         hold_key = wall_hold_key(payload.wallid, h)
@@ -334,6 +364,9 @@ async def define_holds(payload: WallTranslation):
     return {
         "message":       "Holds 2 LED Saved",
         "grid": grid,
+        "positions": full_grid,
+        "position_led_ids": position_led_ids,
+        "excluded_position_ids": sorted(excluded_position_ids),
         "holds2led": holds2led,
     }
 

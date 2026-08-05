@@ -75,7 +75,7 @@ def returnwallhtml(wall, path_prefix=""):
                     border: 1px solid white;
                     border-radius: 50%;
                     transform: translate(-50%, -50%);
-                    pointer-events: none;
+                    cursor: pointer;
                     color: white; font-size: 8px; text-align: center; line-height: 8px;
                 }}
                 .hold-point {{
@@ -86,9 +86,17 @@ def returnwallhtml(wall, path_prefix=""):
                     min-width: 16px;
                     padding: 0 4px;
                     border-radius: 8px;
-                    cursor: help;
                     /* Style for the text inside */
                     line-height: 16px;
+                }}
+                .grid-point.excluded-point {{
+                    width: 12px;
+                    height: 12px;
+                    padding: 0;
+                    background-color: rgba(90, 90, 90, 0.35);
+                    border: 2px solid rgba(255, 255, 255, 0.9);
+                    line-height: 12px;
+                    opacity: 0.8;
                 }}
             </style>
         </head>
@@ -103,9 +111,15 @@ def returnwallhtml(wall, path_prefix=""):
                     <input type="checkbox" id="alternating" name="alternating">
                     Alternierendes Raster
                 </label>
+                <label for="alternating-start">Oberste Reihe:</label>
+                <select id="alternating-start" name="alternating-start" disabled>
+                    <option value="0">5 cm, 25 cm, 45 cm, ...</option>
+                    <option value="1">15 cm, 35 cm, 55 cm, ...</option>
+                </select>
             </div>
-            <p>Beim alternierenden Raster muss C gerade sein. Bei C=22 nutzt jede Reihe 11 Punkte; die verwendeten Spalten wechseln von Reihe zu Reihe.</p>
+            <p>Beim alternierenden Raster ist C die Anzahl aller möglichen Spalten. C darf gerade oder ungerade sein; die verwendeten Spalten wechseln von Reihe zu Reihe.</p>
             <p>Bitte klicke die 4 Eckpunkte in der Reihenfolge an: <b>Links-Oben, Rechts-Oben, Rechts-Unten, Links-Unten</b>.</p>
+            <p>Nach dem Berechnen kannst du Rasterpunkte anklicken, um sie abzuwählen oder wieder zu aktivieren. Klicke danach auf <b>Auswahl speichern</b>.</p>
 
             <div id="image-container">
                 <img id="climbing-image" src="{wall['image_url']}" alt="Kletterwand">
@@ -119,7 +133,76 @@ def returnwallhtml(wall, path_prefix=""):
                 const imageContainer = document.getElementById('image-container');
                 const submitBtn = document.getElementById('submit-btn');
                 const statusDiv = document.getElementById('status');
+                const alternatingCheckbox = document.getElementById('alternating');
+                const alternatingStart = document.getElementById('alternating-start');
                 let points = [];
+                let renderedPositions = null;
+                let positionLedIds = {{}};
+                let renderedHolds2led = {{}};
+                let excludedPositionIds = new Set();
+                let selectionDirty = false;
+                let lastGridSettings = null;
+
+                alternatingCheckbox.addEventListener('change', () => {{
+                    alternatingStart.disabled = !alternatingCheckbox.checked;
+                }});
+
+                function renderGrid() {{
+                    document.querySelectorAll('.grid-point').forEach(gp => gp.remove());
+                    if (!renderedPositions) return;
+
+                    const led2holds = {{}};
+                    for (const holdId in renderedHolds2led) {{
+                        const ledId = renderedHolds2led[holdId];
+                        if (!led2holds[ledId]) led2holds[ledId] = holdId;
+                    }}
+
+                    for (const positionIdText in renderedPositions) {{
+                        const [x, y] = renderedPositions[positionIdText];
+                        const positionId = Number(positionIdText);
+                        const ledId = positionLedIds[positionIdText];
+                        const gridPointElement = document.createElement('div');
+                        const excluded = excludedPositionIds.has(positionId);
+                        const classes = ['grid-point'];
+                        gridPointElement.style.left = `${{x}}px`;
+                        gridPointElement.style.top = `${{y}}px`;
+                        gridPointElement.dataset.positionId = positionIdText;
+
+                        if (excluded) {{
+                            classes.push('excluded-point');
+                            gridPointElement.title = 'Position ist abgewählt. Anklicken zum Aktivieren.';
+                        }} else if (led2holds[ledId]) {{
+                            classes.push('hold-point');
+                            gridPointElement.title = `Hold-ID: ${{led2holds[ledId]}}\nLED-ID: ${{ledId}}`;
+                            gridPointElement.textContent = led2holds[ledId].substring(0, 4);
+                        }} else {{
+                            gridPointElement.title = `LED-ID: ${{ledId}}. Anklicken zum Abwählen.`;
+                        }}
+
+                        gridPointElement.className = classes.join(' ');
+                        gridPointElement.addEventListener('click', (event) => {{
+                            event.stopPropagation();
+                            if (excludedPositionIds.has(positionId)) {{
+                                excludedPositionIds.delete(positionId);
+                            }} else {{
+                                excludedPositionIds.add(positionId);
+                            }}
+                            selectionDirty = true;
+                            submitBtn.textContent = 'Auswahl speichern';
+                            renderGrid();
+                            updateGridStatus();
+                        }});
+                        imageContainer.appendChild(gridPointElement);
+                    }}
+                }}
+
+                function updateGridStatus() {{
+                    if (!renderedPositions) return;
+                    const total = Object.keys(renderedPositions).length;
+                    const active = total - excludedPositionIds.size;
+                    const suffix = selectionDirty ? ' – noch nicht gespeichert' : '';
+                    statusDiv.textContent = `Raster: ${{active}} aktiv, ${{excludedPositionIds.size}} abgewählt${{suffix}}`;
+                }}
 
                 function updateUI() {{
                     document.querySelectorAll('.point').forEach(p => p.remove());
@@ -165,14 +248,31 @@ def returnwallhtml(wall, path_prefix=""):
                     const r = parseInt(rows.value);
                     const c = parseInt(columns.value);
                     const alternating = document.getElementById('alternating').checked;
+                    const alternatingStartColumn = parseInt(alternatingStart.value);
 
                     if (isNaN(r) || isNaN(c)) {{
                         alert('Bitte geben Sie gültige Werte für R und C ein.');
                         return;
                     }}
 
-                    if (alternating && (c < 2 || c % 2 !== 0)) {{
-                        alert('Für ein alternierendes Raster muss C eine gerade Zahl sein.');
+                    if (alternating && c < 2) {{
+                        alert('Für ein alternierendes Raster muss C mindestens 2 sein.');
+                        return;
+                    }}
+
+                    const gridSettings = JSON.stringify({{
+                        points: points,
+                        r: r,
+                        c: c,
+                        alternating: alternating,
+                        alternatingStartColumn: alternatingStartColumn,
+                    }});
+                    if (lastGridSettings !== null && gridSettings !== lastGridSettings) {{
+                        excludedPositionIds.clear();
+                    }}
+
+                    if (renderedPositions && excludedPositionIds.size === Object.keys(renderedPositions).length) {{
+                        alert('Mindestens eine Rasterposition muss aktiv bleiben.');
                         return;
                     }}
 
@@ -188,6 +288,8 @@ def returnwallhtml(wall, path_prefix=""):
                         r: r,
                         c: c,
                         alternating: alternating,
+                        alternating_start_column: alternatingStartColumn,
+                        excluded_position_ids: Array.from(excludedPositionIds),
                         wallid: { wall['id'] }
                     }};
                     
@@ -202,44 +304,26 @@ def returnwallhtml(wall, path_prefix=""):
                             body: JSON.stringify(payload),
                         }});
                         const result = await response.json();
+                        if (!response.ok) {{
+                            throw new Error(result.detail || result.message || `HTTP ${{response.status}}`);
+                        }}
                         
-                        // Clear previous grid points if any
-                        document.querySelectorAll('.grid-point').forEach(gp => gp.remove());
-
-                        if (result.grid) {{
-                            const led2holds = {{}};
-                            if (result.holds2led) {{
-                                for (const holdId in result.holds2led) {{
-                                    const ledId = result.holds2led[holdId];
-                                    // Store only the FIRST hold ID found for an LED
-                                    if (!led2holds[ledId]) {{
-                                        led2holds[ledId] = holdId;
-                                    }}
-                                }}
-                            }}
-
-                            for (const id in result.grid) {{
-                                const [x, y] = result.grid[id];
-                                const gridPointElement = document.createElement('div');
-                                // Use a variable for class names
-                                let classes = ['grid-point'];
-                                gridPointElement.style.left = `${{x}}px`;
-                                gridPointElement.style.top = `${{y}}px`;
-                                if (led2holds[id]) {{
-                                    classes.push('hold-point');
-                                    gridPointElement.title = `Hold-ID: ${{led2holds[id]}}\nLED-ID: ${{id}}`;
-                                    // Display the first 4 chars of the hold ID
-                                    gridPointElement.textContent = led2holds[id].substring(0, 4);
-                                }}
-                                gridPointElement.className = classes.join(' ');
-                                imageContainer.appendChild(gridPointElement);
-                            }}
+                        if (result.positions) {{
+                            renderedPositions = result.positions;
+                            positionLedIds = result.position_led_ids || {{}};
+                            renderedHolds2led = result.holds2led || {{}};
+                            excludedPositionIds = new Set(result.excluded_position_ids || []);
+                            selectionDirty = false;
+                            lastGridSettings = gridSettings;
+                            submitBtn.textContent = 'Auswahl speichern';
+                            renderGrid();
+                            updateGridStatus();
                         }}
 
                         alert(`Server-Antwort: ${{result.message}}`);
                     }} catch (error) {{
                         console.error('Fehler beim Senden:', error);
-                        alert('Ein Fehler ist beim Senden aufgetreten.');
+                        alert(`Ein Fehler ist beim Senden aufgetreten: ${{error.message}}`);
                     }}
                 }});
             </script>
