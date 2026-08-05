@@ -24,6 +24,7 @@ from sqlalchemy.types import JSON
 import requests
 from templates.wall_lighting import return_wall_lighting_html
 from templates.wallselector import returnwallhtml
+from templates.language import language_switch_html
 from config import config
 Base = declarative_base()
 # SQLAlchemy Model for Wall
@@ -89,6 +90,17 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
 wall_lighting_mode = "dark"  # "dark" or "bright"
+
+WALL_LIST_TRANSLATIONS = {
+    "en": {
+        "page.title": "Wall selector",
+        "page.heading": "Wall selector",
+    },
+    "de": {
+        "page.title": "Wandauswahl",
+        "page.heading": "Wandauswahl",
+    },
+}
 
 
 def configure_access_logger():
@@ -332,18 +344,46 @@ async def list_walls(gym: str = ""):
     if not isinstance(walls, list) or not all(isinstance(wall, dict) for wall in walls):
         raise HTTPException(status_code=502, detail="Unexpected gym walls response from Crux")
 
-    html_content = "<h1>Wall Selector</h1>"
+    wall_cards = []
     for wall in walls:
         if "id" not in wall or "name" not in wall:
             raise HTTPException(status_code=502, detail="Incomplete wall data from Crux")
         wall_id = quote(str(wall["id"]), safe="")
         wall_name = escape(str(wall["name"]))
         image_url = escape(str(wall.get("image_url") or ""), quote=True)
-        html_content += (
+        wall_cards.append(
             f'<div style="margin-bottom:20px;"><h2>{wall_name}</h2>'
             f'<a href="{APP_PATH_PREFIX}/wallcreation?id={wall_id}"><img src="{image_url}" '
             f'alt="{wall_name}" style="max-width:300px;"></a></div>'
         )
+    language_switch = language_switch_html(WALL_LIST_TRANSLATIONS)
+    html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title data-i18n="page.title">Wall selector</title>
+            <style>
+                body {{
+                    font-family: sans-serif;
+                    margin: 20px;
+                    background-color: #f4f4f9;
+                    color: #222;
+                }}
+                img {{
+                    max-width: 300px;
+                    height: auto;
+                }}
+            </style>
+        </head>
+        <body>
+            <h1 data-i18n="page.heading">Wall selector</h1>
+            {''.join(wall_cards)}
+            {language_switch}
+        </body>
+        </html>
+    """
     return HTMLResponse(content=html_content)
 
 @app.get ("/wallcreation")

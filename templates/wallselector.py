@@ -1,18 +1,101 @@
 import json
 
+from templates.language import language_switch_html
+
+
+TRANSLATIONS = {
+    "en": {
+        "page.title": "Climbing wall – select points",
+        "page.heading": "Climbing wall – select points",
+        "form.rows_placeholder": "Number of rows",
+        "form.columns_placeholder": "Number of columns",
+        "form.alternating": "Alternating grid",
+        "form.top_row": "Top row:",
+        "form.not_offset": "Not offset",
+        "form.offset": "Offset",
+        "form.cable_path": "Cable path:",
+        "form.top_left": "Top left",
+        "form.top_right": "Top right",
+        "form.bottom_left": "Bottom left",
+        "form.bottom_right": "Bottom right",
+        "form.horizontal": "Horizontal (row by row)",
+        "form.vertical": "Vertical (column by column)",
+        "help.alternating": "For an alternating grid, C is the number of all possible columns. C can be even or odd; the columns used alternate from row to row.",
+        "help.numbering": "LED numbering starts with LED 0 in the selected corner and follows the cable in a horizontal or vertical snake pattern.",
+        "help.corners": "Click the 4 corner points in this order:",
+        "help.corner_order": "Top left, top right, bottom right, bottom left",
+        "help.selection": "After calculating, click grid points to disable or reactivate them. Then click",
+        "help.save_selection": "Save selection",
+        "image.alt": "Climbing wall",
+        "button.send": "Send coordinates",
+        "button.save": "Save selection",
+        "status.points": "Points: {count} / 4",
+        "status.grid": "Grid: {active} active, {excluded} disabled{suffix}",
+        "status.unsaved": " – not saved yet",
+        "grid.excluded_title": "Position is disabled. Click to activate it.",
+        "grid.hold_title": "Hold ID: {holdId}\nLED ID: {ledId}",
+        "grid.led_title": "LED ID: {ledId}. Click to disable.",
+        "alert.four_points": "Please select exactly 4 points.",
+        "alert.valid_grid": "Please enter valid values for R and C.",
+        "alert.alternating_columns": "C must be at least 2 for an alternating grid.",
+        "alert.active_position": "At least one grid position must remain active.",
+        "alert.saved": "Saved successfully.",
+        "alert.send_error": "An error occurred while sending: {message}",
+    },
+    "de": {
+        "page.title": "Kletterwand – Punkte auswählen",
+        "page.heading": "Kletterwand – Punkte auswählen",
+        "form.rows_placeholder": "Anzahl der Reihen",
+        "form.columns_placeholder": "Anzahl der Spalten",
+        "form.alternating": "Alternierendes Raster",
+        "form.top_row": "Oberste Reihe:",
+        "form.not_offset": "Nicht eingerückt",
+        "form.offset": "Eingerückt",
+        "form.cable_path": "Kabelverlauf:",
+        "form.top_left": "Oben links",
+        "form.top_right": "Oben rechts",
+        "form.bottom_left": "Unten links",
+        "form.bottom_right": "Unten rechts",
+        "form.horizontal": "Horizontal (zeilenweise)",
+        "form.vertical": "Vertikal (spaltenweise)",
+        "help.alternating": "Beim alternierenden Raster ist C die Anzahl aller möglichen Spalten. C darf gerade oder ungerade sein; die verwendeten Spalten wechseln von Reihe zu Reihe.",
+        "help.numbering": "Die LED-Nummerierung beginnt bei LED 0 in der gewählten Ecke und folgt dem Kabel schlangenförmig horizontal oder vertikal.",
+        "help.corners": "Bitte klicke die 4 Eckpunkte in dieser Reihenfolge an:",
+        "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
+        "help.selection": "Nach dem Berechnen kannst du Rasterpunkte anklicken, um sie abzuwählen oder wieder zu aktivieren. Klicke danach auf",
+        "help.save_selection": "Auswahl speichern",
+        "image.alt": "Kletterwand",
+        "button.send": "Koordinaten senden",
+        "button.save": "Auswahl speichern",
+        "status.points": "Punkte: {count} / 4",
+        "status.grid": "Raster: {active} aktiv, {excluded} abgewählt{suffix}",
+        "status.unsaved": " – noch nicht gespeichert",
+        "grid.excluded_title": "Position ist abgewählt. Anklicken zum Aktivieren.",
+        "grid.hold_title": "Griff-ID: {holdId}\nLED-ID: {ledId}",
+        "grid.led_title": "LED-ID: {ledId}. Anklicken zum Abwählen.",
+        "alert.four_points": "Bitte wähle genau 4 Punkte aus.",
+        "alert.valid_grid": "Bitte gib gültige Werte für R und C ein.",
+        "alert.alternating_columns": "Für ein alternierendes Raster muss C mindestens 2 sein.",
+        "alert.active_position": "Mindestens eine Rasterposition muss aktiv bleiben.",
+        "alert.saved": "Erfolgreich gespeichert.",
+        "alert.send_error": "Beim Senden ist ein Fehler aufgetreten: {message}",
+    },
+}
+
 
 def returnwallhtml(wall, path_prefix="", saved_creation=None):
     saved_creation_json = json.dumps(saved_creation or {}, separators=(",", ":"))
     wall_image_width_json = json.dumps(wall.get("image_width"))
     wall_image_height_json = json.dumps(wall.get("image_height"))
+    language_switch = language_switch_html(TRANSLATIONS)
     html_content = f"""
         
         <!DOCTYPE html>
-        <html lang="de">
+        <html lang="en">
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Kletterwand - Punkte auswählen</title>
+            <title data-i18n="page.title">Climbing wall – select points</title>
             <style>
                 /* Gleiche CSS wie in test.html */
                 body {{
@@ -107,45 +190,47 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             </style>
         </head>
         <body>
-            <h1>Kletterwand - Punkte auswählen</h1>
+            <h1 data-i18n="page.heading">Climbing wall – select points</h1>
              <div>
                 <label for="rows">R: </label>
-                <input type="number" id="rows" name="rows" placeholder="Anzahl der Reihen" min="1">
+                <input type="number" id="rows" name="rows" placeholder="Number of rows" data-i18n-placeholder="form.rows_placeholder" min="1">
                 <label for="columns">C: </label>
-                <input type="number" id="columns" name="columns" placeholder="Anzahl der Spalten" min="1">
+                <input type="number" id="columns" name="columns" placeholder="Number of columns" data-i18n-placeholder="form.columns_placeholder" min="1">
                 <label for="alternating">
                     <input type="checkbox" id="alternating" name="alternating">
-                    Alternierendes Raster
+                    <span data-i18n="form.alternating">Alternating grid</span>
                 </label>
-                <label for="alternating-start">Oberste Reihe:</label>
+                <label for="alternating-start" data-i18n="form.top_row">Top row:</label>
                 <select id="alternating-start" name="alternating-start" disabled>
-                    <option value="0">Nicht eingerückt</option>
-                    <option value="1">Eingerückt</option>
+                    <option value="0" data-i18n="form.not_offset">Not offset</option>
+                    <option value="1" data-i18n="form.offset">Offset</option>
                 </select>
                 <label for="led-start-corner">LED 0:</label>
                 <select id="led-start-corner" name="led-start-corner">
-                    <option value="top_left">Oben links</option>
-                    <option value="top_right">Oben rechts</option>
-                    <option value="bottom_left" selected>Unten links</option>
-                    <option value="bottom_right">Unten rechts</option>
+                    <option value="top_left" data-i18n="form.top_left">Top left</option>
+                    <option value="top_right" data-i18n="form.top_right">Top right</option>
+                    <option value="bottom_left" data-i18n="form.bottom_left" selected>Bottom left</option>
+                    <option value="bottom_right" data-i18n="form.bottom_right">Bottom right</option>
                 </select>
-                <label for="led-direction">Kabelverlauf:</label>
+                <label for="led-direction" data-i18n="form.cable_path">Cable path:</label>
                 <select id="led-direction" name="led-direction">
-                    <option value="horizontal">Horizontal (zeilenweise)</option>
-                    <option value="vertical" selected>Vertikal (spaltenweise)</option>
+                    <option value="horizontal" data-i18n="form.horizontal">Horizontal (row by row)</option>
+                    <option value="vertical" data-i18n="form.vertical" selected>Vertical (column by column)</option>
                 </select>
             </div>
-            <p>Beim alternierenden Raster ist C die Anzahl aller möglichen Spalten. C darf gerade oder ungerade sein; die verwendeten Spalten wechseln von Reihe zu Reihe.</p>
-            <p>Die LED-Nummerierung beginnt bei LED 0 in der gewählten Ecke und folgt dem Kabel schlangenförmig horizontal oder vertikal.</p>
-            <p>Bitte klicke die 4 Eckpunkte in der Reihenfolge an: <b>Links-Oben, Rechts-Oben, Rechts-Unten, Links-Unten</b>.</p>
-            <p>Nach dem Berechnen kannst du Rasterpunkte anklicken, um sie abzuwählen oder wieder zu aktivieren. Klicke danach auf <b>Auswahl speichern</b>.</p>
+            <p data-i18n="help.alternating">For an alternating grid, C is the number of all possible columns. C can be even or odd; the columns used alternate from row to row.</p>
+            <p data-i18n="help.numbering">LED numbering starts with LED 0 in the selected corner and follows the cable in a horizontal or vertical snake pattern.</p>
+            <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
+            <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save selection</b>.</p>
 
             <div id="image-container">
-                <img id="climbing-image" src="{wall['image_url']}" alt="Kletterwand">
+                <img id="climbing-image" src="{wall['image_url']}" alt="Climbing wall" data-i18n-alt="image.alt">
             </div>
 
-            <div id="status">Punkte: 0 / 4</div>
-            <button id="submit-btn">Koordinaten Senden</button>
+            <div id="status">Points: 0 / 4</div>
+            <button id="submit-btn" data-i18n="button.send">Send coordinates</button>
+
+            {language_switch}
 
             <script>
                 // JavaScript bleibt unverändert wie in test.html
@@ -169,6 +254,16 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 let excludedPositionIds = new Set(savedCreation.excluded_position_ids || []);
                 let selectionDirty = false;
                 let lastGridSettings = null;
+
+                function t(key, replacements = {{}}) {{
+                    return window.cruxI18n.t(key, replacements);
+                }}
+
+                function updateSubmitButtonLabel() {{
+                    submitBtn.textContent = t(
+                        renderedPositions ? 'button.save' : 'button.send'
+                    );
+                }}
 
                 alternatingCheckbox.addEventListener('change', () => {{
                     alternatingStart.disabled = !alternatingCheckbox.checked;
@@ -246,13 +341,16 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
                         if (excluded) {{
                             classes.push('excluded-point');
-                            gridPointElement.title = 'Position ist abgewählt. Anklicken zum Aktivieren.';
+                            gridPointElement.title = t('grid.excluded_title');
                         }} else if (led2holds[ledId]) {{
                             classes.push('hold-point');
-                            gridPointElement.title = `Hold-ID: ${{led2holds[ledId]}}\nLED-ID: ${{ledId}}`;
+                            gridPointElement.title = t('grid.hold_title', {{
+                                holdId: led2holds[ledId],
+                                ledId: ledId,
+                            }});
                             gridPointElement.textContent = led2holds[ledId].substring(0, 4);
                         }} else {{
-                            gridPointElement.title = `LED-ID: ${{ledId}}. Anklicken zum Abwählen.`;
+                            gridPointElement.title = t('grid.led_title', {{ ledId: ledId }});
                         }}
 
                         gridPointElement.className = classes.join(' ');
@@ -264,7 +362,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                                 excludedPositionIds.add(positionId);
                             }}
                             selectionDirty = true;
-                            submitBtn.textContent = 'Auswahl speichern';
+                            updateSubmitButtonLabel();
                             renderGrid();
                             updateGridStatus();
                         }});
@@ -276,8 +374,12 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     if (!renderedPositions) return;
                     const total = Object.keys(renderedPositions).length;
                     const active = total - excludedPositionIds.size;
-                    const suffix = selectionDirty ? ' – noch nicht gespeichert' : '';
-                    statusDiv.textContent = `Raster: ${{active}} aktiv, ${{excludedPositionIds.size}} abgewählt${{suffix}}`;
+                    const suffix = selectionDirty ? t('status.unsaved') : '';
+                    statusDiv.textContent = t('status.grid', {{
+                        active: active,
+                        excluded: excludedPositionIds.size,
+                        suffix: suffix,
+                    }});
                 }}
 
                 function updateUI() {{
@@ -290,7 +392,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                         pointElement.style.top = `${{displayPoint.y}}px`;
                         imageContainer.appendChild(pointElement);
                     }});
-                    statusDiv.textContent = `Punkte: ${{points.length}} / 4`;
+                    statusDiv.textContent = t('status.points', {{ count: points.length }});
                     if (points.length === 4) {{
                         submitBtn.style.display = 'block';
                     }} else {{
@@ -325,8 +427,8 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     }}
                     if (points.length === 4) {{
                         lastGridSettings = currentGridSettings();
-                        submitBtn.textContent = 'Auswahl speichern';
                     }}
+                    updateSubmitButtonLabel();
                     updateUI();
                     renderGrid();
                     updateGridStatus();
@@ -348,6 +450,13 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     updateGridStatus();
                 }});
 
+                window.addEventListener('crux-language-change', () => {{
+                    updateSubmitButtonLabel();
+                    updateUI();
+                    renderGrid();
+                    updateGridStatus();
+                }});
+
                 imageContainer.addEventListener('contextmenu', (event) => {{
                     event.preventDefault();
                     if (points.length > 0) {{
@@ -358,7 +467,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
                 submitBtn.addEventListener('click', async () => {{
                     if (points.length !== 4) {{
-                        alert('Bitte wählen Sie genau 4 Punkte aus.');
+                        alert(t('alert.four_points'));
                         return;
                     }}
 
@@ -370,12 +479,12 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     const ledDirection = document.getElementById('led-direction').value;
 
                     if (isNaN(r) || isNaN(c)) {{
-                        alert('Bitte geben Sie gültige Werte für R und C ein.');
+                        alert(t('alert.valid_grid'));
                         return;
                     }}
 
                     if (alternating && c < 2) {{
-                        alert('Für ein alternierendes Raster muss C mindestens 2 sein.');
+                        alert(t('alert.alternating_columns'));
                         return;
                     }}
 
@@ -385,7 +494,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     }}
 
                     if (renderedPositions && excludedPositionIds.size === Object.keys(renderedPositions).length) {{
-                        alert('Mindestens eine Rasterposition muss aktiv bleiben.');
+                        alert(t('alert.active_position'));
                         return;
                     }}
 
@@ -430,15 +539,15 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                             excludedPositionIds = new Set(result.excluded_position_ids || []);
                             selectionDirty = false;
                             lastGridSettings = gridSettings;
-                            submitBtn.textContent = 'Auswahl speichern';
+                            updateSubmitButtonLabel();
                             renderGrid();
                             updateGridStatus();
                         }}
 
-                        alert(`Server-Antwort: ${{result.message}}`);
+                        alert(t('alert.saved'));
                     }} catch (error) {{
                         console.error('Fehler beim Senden:', error);
-                        alert(`Ein Fehler ist beim Senden aufgetreten: ${{error.message}}`);
+                        alert(t('alert.send_error', {{ message: error.message }}));
                     }}
                 }});
 

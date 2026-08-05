@@ -393,6 +393,9 @@ class WallEndpointTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertIn("Kontors Keller", html)
         self.assertIn("/wallcreation?id=216943", html)
+        self.assertIn('<html lang="en">', html)
+        self.assertIn('id="language-toggle"', html)
+        self.assertIn('data-i18n="page.heading">Wall selector</h1>', html)
         get.assert_called_once_with(
             "https://www.cruxapp.ca/api/v1/gyms/kontors-keller/gym_walls",
             headers=main.auth_header,
@@ -748,8 +751,14 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn('id="alternating"', html)
         self.assertIn("alternating: alternating", html)
         self.assertIn('id="alternating-start"', html)
-        self.assertIn('<option value="0">Nicht eingerückt</option>', html)
-        self.assertIn('<option value="1">Eingerückt</option>', html)
+        self.assertIn(
+            '<option value="0" data-i18n="form.not_offset">Not offset</option>',
+            html,
+        )
+        self.assertIn(
+            '<option value="1" data-i18n="form.offset">Offset</option>',
+            html,
+        )
         self.assertIn("alternating_start_column: alternatingStartColumn", html)
 
     def test_wall_selector_offers_led_cable_layout(self):
@@ -759,12 +768,61 @@ class PathPrefixTests(unittest.TestCase):
         )
 
         self.assertIn('id="led-start-corner"', html)
-        self.assertIn('<option value="top_right">Oben rechts</option>', html)
-        self.assertIn('<option value="bottom_left" selected>Unten links</option>', html)
+        self.assertIn(
+            '<option value="top_right" data-i18n="form.top_right">Top right</option>',
+            html,
+        )
+        self.assertIn(
+            '<option value="bottom_left" data-i18n="form.bottom_left" selected>Bottom left</option>',
+            html,
+        )
         self.assertIn('id="led-direction"', html)
-        self.assertIn('<option value="vertical" selected>Vertikal (spaltenweise)</option>', html)
+        self.assertIn(
+            '<option value="vertical" data-i18n="form.vertical" selected>Vertical (column by column)</option>',
+            html,
+        )
         self.assertIn("led_start_corner: ledStartCorner", html)
         self.assertIn("led_direction: ledDirection", html)
+
+    def test_pages_default_to_english_and_offer_opposite_flag(self):
+        wall_selector = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+        )
+        wall_lighting = main.return_wall_lighting_html()
+
+        for html in (wall_selector, wall_lighting):
+            with self.subTest(page=html[:80]):
+                self.assertIn('<html lang="en">', html)
+                self.assertIn('id="language-toggle"', html)
+                self.assertIn('>🇩🇪</button>', html)
+                self.assertIn(
+                    "toggle.textContent = targetLanguage === 'de' ? '🇩🇪' : '🇬🇧';",
+                    html,
+                )
+
+        self.assertIn("Climbing wall – select points", wall_selector)
+        self.assertIn("Kletterwand – Punkte auswählen", wall_selector)
+        self.assertIn("Wall lighting mode", wall_lighting)
+        self.assertIn("Wand-Beleuchtungsmodus", wall_lighting)
+
+    def test_language_choice_is_loaded_and_persisted_in_browser_storage(self):
+        html = main.return_wall_lighting_html()
+
+        self.assertIn("const storageKey = 'cruxwledbridge.language';", html)
+        self.assertIn("window.localStorage.getItem(storageKey)", html)
+        self.assertIn(": 'en';", html)
+        self.assertIn("window.localStorage.setItem(storageKey, currentLanguage)", html)
+        self.assertIn("document.documentElement.lang = currentLanguage", html)
+
+    def test_wall_selector_retranslates_dynamic_content(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+        )
+
+        self.assertIn("window.addEventListener('crux-language-change'", html)
+        self.assertIn("t('status.grid'", html)
+        self.assertIn("t('grid.excluded_title')", html)
+        self.assertIn("alert(t('alert.four_points'))", html)
 
     def test_wall_selector_can_exclude_rendered_positions(self):
         html = main.returnwallhtml(
