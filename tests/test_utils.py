@@ -290,10 +290,32 @@ class PathPrefixTests(unittest.TestCase):
         self.assertEqual(main.normalize_path_prefix("cruxwledbridge/"), "/cruxwledbridge")
         self.assertEqual(main.normalize_path_prefix("/"), "")
 
-    def test_toggle_gui_uses_path_prefix(self):
-        html = main.returntogglehtml("/cruxwledbridge")
+    def test_wall_lighting_uses_path_prefix(self):
+        html = main.return_wall_lighting_html("/cruxwledbridge")
 
-        self.assertIn("fetch('/cruxwledbridge/toggle_mode'", html)
+        self.assertIn("fetch('/cruxwledbridge/wall_lighting_mode'", html)
+        self.assertIn("Wand-Beleuchtungsmodus", html)
+        self.assertIn("Dunkel – nur Boulder", html)
+        self.assertIn("Hell – freie LEDs gedimmt", html)
+
+    def test_wall_lighting_routes_replace_toggle_gui_routes(self):
+        routes = {(route.path, tuple(route.methods or [])) for route in main.app.routes}
+
+        self.assertTrue(any(path == "/wall_lighting" and "GET" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/wall_lighting_mode" and "POST" in methods for path, methods in routes))
+        self.assertFalse(any(path in {"/toggle_gui", "/toggle_mode"} for path, _ in routes))
+
+    def test_wall_lighting_mode_updates_server_state(self):
+        original_mode = main.wall_lighting_mode
+        try:
+            result = asyncio.run(
+                main.set_wall_lighting_mode(main.WallLightingMode(mode="bright"))
+            )
+
+            self.assertEqual(main.wall_lighting_mode, "bright")
+            self.assertEqual(result, {"message": "Wall lighting mode set to bright"})
+        finally:
+            main.wall_lighting_mode = original_mode
 
     def test_wall_selector_uses_path_prefix(self):
         html = main.returnwallhtml(

@@ -47,7 +47,8 @@ After that you can start the container and access it under `https://<VIRTUAL_HOS
 3) Input your grid size, then select whether the grid is standard or alternating. In alternating mode, `C` is the total number of possible horizontal positions and may be even or odd. Choose whether the top row is indented or not indented. For example, with `C=22`, each row contains 11 LEDs; with an odd `C`, alternating rows differ by one LED while their snake IDs remain contiguous. Tap the grid corners in the order top left, top right, bottom right, bottom left and press send. You can then click individual grid positions to disable or re-enable them and save the adjusted mapping.
 4) configure a webhook for the user.viewed action --> `https://<bridge>/cruxwledbridge/viewed`
 5) When you press on a climb, it should light up the right holes on the wall. Hold mappings are stored as `<wall_id>_<hold_id>`, so the webhook payload must include `payload.wall_id`.
-6) enjoy climbing!
+6) The wall lighting can be switched at `https://<bridge>/cruxwledbridge/wall_lighting`: dark lights only the current boulder, while bright additionally lights unused LEDs dim white. The same setting is available through `POST /cruxwledbridge/wall_lighting_mode` with `{"mode":"dark"}` or `{"mode":"bright"}`.
+7) enjoy climbing!
 
 ## Hardware used
 I use following hardware on the wall:

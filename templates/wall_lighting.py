@@ -1,10 +1,10 @@
-def returntogglehtml(path_prefix=""):
+def return_wall_lighting_html(path_prefix=""):
     html= """
     <!DOCTYPE html>
     <html lang="de">
     <head>
         <meta charset="UTF-8">
-        <title>Light Mode Toggle</title>
+        <title>Wand-Beleuchtungsmodus</title>
         <style>
             body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin-top: 50px; background-color: #f4f4f9; }
             h1 { color: #333; }
@@ -17,11 +17,11 @@ def returntogglehtml(path_prefix=""):
         </style>
     </head>
     <body>
-        <h1>Light Mode Umschalter</h1>
+        <h1>Wand-Beleuchtungsmodus</h1>
         <p>Wähle den Beleuchtungsmodus für die Kletterwand.</p>
         <div>
-            <button id="btn-dark" onclick="setMode('dark')">Dark Mode</button>
-            <button id="btn-bright" onclick="setMode('bright')">Bright Mode</button>
+            <button id="btn-dark" onclick="setMode('dark')">Dunkel – nur Boulder</button>
+            <button id="btn-bright" onclick="setMode('bright')">Hell – freie LEDs gedimmt</button>
         </div>
         <div id="status"></div>
 
@@ -30,7 +30,7 @@ def returntogglehtml(path_prefix=""):
                 const statusDiv = document.getElementById('status');
                 statusDiv.textContent = 'Wird umgeschaltet...';
                 try {
-                    const response = await fetch('__PATH_PREFIX__/toggle_mode', {
+                    const response = await fetch('__PATH_PREFIX__/wall_lighting_mode', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',

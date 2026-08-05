@@ -20,7 +20,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignK
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import JSON
 import requests
-from templates.toggle_gui import returntogglehtml
+from templates.wall_lighting import return_wall_lighting_html
 from templates.wallselector import returnwallhtml
 from config import config
 Base = declarative_base()
@@ -66,7 +66,7 @@ def normalize_path_prefix(value: str) -> str:
 APP_PATH_PREFIX = normalize_path_prefix(os.getenv("APP_PATH_PREFIX", ""))
 app = FastAPI(root_path=APP_PATH_PREFIX)
 
-light_mode = "dark" # "dark" or "bright"
+wall_lighting_mode = "dark"  # "dark" or "bright"
 
 def register_exception(app: FastAPI):
     @app.exception_handler(RequestValidationError)
@@ -80,7 +80,7 @@ def register_exception(app: FastAPI):
 
 register_exception(app)
 
-class Mode(BaseModel):
+class WallLightingMode(BaseModel):
     mode: str
 
 class Hold(BaseModel):
@@ -177,7 +177,7 @@ async def viewed(payload: PayL):
             hit = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold_key).first()
             if hit:
                 holds[hit.ledid] = hold.hold_type
-        sendLightToBoulderwall(holds, light_mode)
+        sendLightToBoulderwall(holds, wall_lighting_mode)
         db.close()
     except Exception as e:
         print("ERROR")
@@ -188,18 +188,18 @@ async def viewed(payload: PayL):
         "image_url": climb.image_url,  # Zugriff auf andere Felder
     }
 
-@app.post("/toggle_mode")
-async def toggle_light_mode(payload: Mode):
-    global light_mode
+@app.post("/wall_lighting_mode")
+async def set_wall_lighting_mode(payload: WallLightingMode):
+    global wall_lighting_mode
     if payload.mode in ["dark", "bright"]:
-        light_mode = payload.mode
-        return {"message": f"Light mode set to {payload.mode}"}
+        wall_lighting_mode = payload.mode
+        return {"message": f"Wall lighting mode set to {payload.mode}"}
     else:
         return JSONResponse(status_code=400, content={"message": "Invalid mode. Use 'dark' or 'bright'."})
 
-@app.get("/toggle_gui", response_class=HTMLResponse)
-async def get_toggle_gui():
-    html_content = returntogglehtml(APP_PATH_PREFIX)
+@app.get("/wall_lighting", response_class=HTMLResponse)
+async def get_wall_lighting():
+    html_content = return_wall_lighting_html(APP_PATH_PREFIX)
     return HTMLResponse(content=html_content)
 
 @app.get("/lightID/{color}/{led_id}")
