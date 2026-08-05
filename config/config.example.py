@@ -29,3 +29,7 @@ colors = {
 # The default is one-to-one for 400 holes. You can skip physical IDs or assign
 # several LEDs to one hole, e.g. {0: [0], 1: [2, 3]} leaves LED 1 unused.
 hole2LEDS = {hole_id: [hole_id] for hole_id in range(400)}
+
+# Duration of the full-wall celebration triggered by a gym climb.sent webhook.
+# The effect itself can be selected (or disabled) on /wall_lighting.
+celebration_duration_seconds = 3.0

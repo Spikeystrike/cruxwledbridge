@@ -1,4 +1,5 @@
 from fastapi.exceptions import RequestValidationError
+import asyncio
 import uvicorn
 import logging
 import os
@@ -12,9 +13,11 @@ from pydantic import BaseModel, Field, HttpUrl
 from typing import List, Optional
 import json
 from utils import (
+    CELEBRATION_EFFECTS,
     generate_grid,
     ledCalculation,
     lightUpHoldId,
+    playCelebrationEffect,
     sendLightToBoulderwall,
     wall_hold_key,
 )
@@ -55,6 +58,13 @@ class WallCreationDB(Base):
     wallid = Column(Integer, ForeignKey("walls.id"), primary_key=True, index=True)
     settings = Column(JSON, nullable=False)
 
+
+class AppSettingDB(Base):
+    __tablename__ = "app_settings"
+
+    key = Column(String, primary_key=True)
+    value = Column(JSON, nullable=False)
+
 # SQLite engine and session setup
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////code/db/app.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -90,6 +100,92 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
 wall_lighting_mode = "dark"  # "dark" or "bright"
+current_wall_holds = {}
+celebration_duration_seconds = float(
+    getattr(config, "celebration_duration_seconds", 3.0)
+)
+_lighting_state_lock = asyncio.Lock()
+_celebration_generation = 0
+_celebration_active = False
+_celebration_tasks = set()
+
+
+def load_celebration_effect():
+    default_effect = getattr(config, "celebration_effect", "rainbow")
+    if default_effect not in {"off", *CELEBRATION_EFFECTS}:
+        default_effect = "rainbow"
+
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettingDB).filter(
+            AppSettingDB.key == "celebration_effect"
+        ).first()
+        if setting and setting.value in {"off", *CELEBRATION_EFFECTS}:
+            return setting.value
+        return default_effect
+    finally:
+        db.close()
+
+
+def persist_celebration_effect(effect):
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettingDB).filter(
+            AppSettingDB.key == "celebration_effect"
+        ).first()
+        if setting:
+            setting.value = effect
+        else:
+            db.add(AppSettingDB(key="celebration_effect", value=effect))
+        db.commit()
+    finally:
+        db.close()
+
+
+celebration_effect = load_celebration_effect()
+
+
+async def _restore_current_wall():
+    await asyncio.to_thread(
+        sendLightToBoulderwall,
+        dict(current_wall_holds),
+        wall_lighting_mode,
+    )
+
+
+async def _run_celebration(effect, generation):
+    global _celebration_active
+    try:
+        async with _lighting_state_lock:
+            if generation != _celebration_generation:
+                return
+            await asyncio.to_thread(playCelebrationEffect, effect)
+        await asyncio.sleep(celebration_duration_seconds)
+    except Exception:
+        logging.getLogger("cruxwledbridge").exception(
+            "Could not run celebration effect %s", effect
+        )
+    finally:
+        async with _lighting_state_lock:
+            if generation == _celebration_generation:
+                try:
+                    await _restore_current_wall()
+                finally:
+                    _celebration_active = False
+
+
+def schedule_celebration():
+    global _celebration_active, _celebration_generation
+    if celebration_effect == "off":
+        return False
+
+    _celebration_generation += 1
+    generation = _celebration_generation
+    _celebration_active = True
+    task = asyncio.create_task(_run_celebration(celebration_effect, generation))
+    _celebration_tasks.add(task)
+    task.add_done_callback(_celebration_tasks.discard)
+    return True
 
 WALL_LIST_TRANSLATIONS = {
     "en": {
@@ -192,6 +288,10 @@ register_exception(app)
 class WallLightingMode(BaseModel):
     mode: str
 
+
+class CelebrationEffectSelection(BaseModel):
+    effect: str
+
 class Hold(BaseModel):
     id: str
     hold_type: str
@@ -270,6 +370,20 @@ class Climb(BaseModel):
     updated_at: str
 class PayL(BaseModel):
     payload: Climb
+
+
+class SentClimb(BaseModel):
+    id: int
+    name: str
+
+
+class ClimbSend(BaseModel):
+    id: int
+    climb: SentClimb
+
+
+class SentPayL(BaseModel):
+    payload: ClimbSend
     
 @app.get("/")
 async def root():
@@ -278,6 +392,7 @@ async def root():
 
 @app.post("/viewed")
 async def viewed(payload: PayL, request: Request):
+    global current_wall_holds
     # Verarbeite den JSON-Payload
     climb = payload.payload
     request.state.viewed_climb = {
@@ -293,7 +408,14 @@ async def viewed(payload: PayL, request: Request):
             hit = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold_key).first()
             if hit:
                 holds[hit.ledid] = hold.hold_type
-        sendLightToBoulderwall(holds, wall_lighting_mode)
+        async with _lighting_state_lock:
+            current_wall_holds = dict(holds)
+            if not _celebration_active:
+                await asyncio.to_thread(
+                    sendLightToBoulderwall,
+                    holds,
+                    wall_lighting_mode,
+                )
         db.close()
     except Exception as e:
         print("ERROR")
@@ -302,6 +424,21 @@ async def viewed(payload: PayL, request: Request):
         "message": "Payload received successfully",
         "name": climb.name,  # Beispiel: Zugriff auf eines der Felder
         "image_url": climb.image_url,  # Zugriff auf andere Felder
+    }
+
+
+@app.post("/sent")
+async def sent(payload: SentPayL, request: Request):
+    send = payload.payload
+    request.state.sent_climb = {
+        "send_id": send.id,
+        "climb_id": send.climb.id,
+        "climb_name": send.climb.name,
+    }
+    started = schedule_celebration()
+    return {
+        "message": "Celebration started" if started else "Celebration disabled",
+        "effect": celebration_effect,
     }
 
 @app.post("/wall_lighting_mode")
@@ -313,9 +450,31 @@ async def set_wall_lighting_mode(payload: WallLightingMode):
     else:
         return JSONResponse(status_code=400, content={"message": "Invalid mode. Use 'dark' or 'bright'."})
 
+
+@app.post("/celebration_effect")
+async def set_celebration_effect(payload: CelebrationEffectSelection):
+    global celebration_effect, _celebration_active, _celebration_generation
+    allowed_effects = {"off", *CELEBRATION_EFFECTS}
+    if payload.effect not in allowed_effects:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Invalid celebration effect."},
+        )
+
+    celebration_effect = payload.effect
+    persist_celebration_effect(payload.effect)
+
+    if payload.effect == "off" and _celebration_active:
+        _celebration_generation += 1
+        async with _lighting_state_lock:
+            await _restore_current_wall()
+            _celebration_active = False
+
+    return {"message": "Celebration effect updated", "effect": payload.effect}
+
 @app.get("/wall_lighting", response_class=HTMLResponse)
 async def get_wall_lighting():
-    html_content = return_wall_lighting_html(APP_PATH_PREFIX)
+    html_content = return_wall_lighting_html(APP_PATH_PREFIX, celebration_effect)
     return HTMLResponse(content=html_content)
 
 @app.get("/lightID/{color}/{led_id}")

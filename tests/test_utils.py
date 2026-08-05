@@ -163,6 +163,114 @@ class AccessLoggingTests(unittest.TestCase):
         session_local.return_value.close.assert_called_once_with()
 
 
+class CelebrationTests(unittest.TestCase):
+    def setUp(self):
+        self.original_effect = main.celebration_effect
+        self.original_duration = main.celebration_duration_seconds
+        self.original_holds = main.current_wall_holds
+        self.original_mode = main.wall_lighting_mode
+        self.original_generation = main._celebration_generation
+        self.original_active = main._celebration_active
+
+    def tearDown(self):
+        main.celebration_effect = self.original_effect
+        main.celebration_duration_seconds = self.original_duration
+        main.current_wall_holds = self.original_holds
+        main.wall_lighting_mode = self.original_mode
+        main._celebration_generation = self.original_generation
+        main._celebration_active = self.original_active
+
+    @patch("main.schedule_celebration", return_value=True)
+    def test_climb_sent_webhook_accepts_full_send_and_starts_effect(self, schedule):
+        request = AccessLoggingTests.make_request(path="/sent")
+        payload = main.SentPayL(
+            payload={
+                "id": 55,
+                "created_at": "2026-08-06T01:00:00Z",
+                "repeat": False,
+                "send_date": "2026-08-06",
+                "climb": {"id": 321, "name": "Blue Moon", "grade": "6B"},
+                "user": {"id": 99, "name": "Climber"},
+            }
+        )
+
+        result = asyncio.run(main.sent(payload, request))
+
+        schedule.assert_called_once_with()
+        self.assertEqual(
+            request.state.sent_climb,
+            {"send_id": 55, "climb_id": 321, "climb_name": "Blue Moon"},
+        )
+        self.assertEqual(result["message"], "Celebration started")
+
+    def test_disabled_celebration_does_not_schedule_task(self):
+        main.celebration_effect = "off"
+
+        self.assertFalse(main.schedule_celebration())
+
+    def test_celebration_selection_is_persisted_in_database(self):
+        db = main.SessionLocal()
+        previous = db.query(main.AppSettingDB).filter(
+            main.AppSettingDB.key == "celebration_effect"
+        ).first()
+        previous_value = previous.value if previous else None
+        db.close()
+
+        try:
+            main.persist_celebration_effect("pride")
+            self.assertEqual(main.load_celebration_effect(), "pride")
+        finally:
+            db = main.SessionLocal()
+            setting = db.query(main.AppSettingDB).filter(
+                main.AppSettingDB.key == "celebration_effect"
+            ).first()
+            if previous_value is None:
+                if setting:
+                    db.delete(setting)
+            elif setting:
+                setting.value = previous_value
+            else:
+                db.add(main.AppSettingDB(
+                    key="celebration_effect",
+                    value=previous_value,
+                ))
+            db.commit()
+            db.close()
+
+    @patch("main.sendLightToBoulderwall")
+    @patch("main.playCelebrationEffect")
+    def test_celebration_restores_latest_wall_state(self, play_effect, send_lights):
+        main.celebration_duration_seconds = 0
+        main.current_wall_holds = {2: "start"}
+        main.wall_lighting_mode = "bright"
+        main._celebration_generation = 8
+        main._celebration_active = True
+
+        asyncio.run(main._run_celebration("rainbow", 8))
+
+        play_effect.assert_called_once_with("rainbow")
+        send_lights.assert_called_once_with({2: "start"}, "bright")
+        self.assertFalse(main._celebration_active)
+
+    @patch("main.persist_celebration_effect")
+    def test_celebration_selection_can_be_changed_or_disabled(self, persist):
+        result = asyncio.run(
+            main.set_celebration_effect(
+                main.CelebrationEffectSelection(effect="fireworks")
+            )
+        )
+
+        self.assertEqual(main.celebration_effect, "fireworks")
+        self.assertEqual(result["effect"], "fireworks")
+        persist.assert_called_once_with("fireworks")
+
+        result = asyncio.run(
+            main.set_celebration_effect(main.CelebrationEffectSelection(effect="off"))
+        )
+        self.assertEqual(main.celebration_effect, "off")
+        self.assertEqual(result["effect"], "off")
+
+
 class WallHoldKeyTests(unittest.TestCase):
     def test_combines_wall_and_hold_ids(self):
         self.assertEqual(
@@ -708,9 +816,11 @@ class PathPrefixTests(unittest.TestCase):
         self.assertEqual(main.normalize_path_prefix("/"), "")
 
     def test_wall_lighting_uses_path_prefix(self):
-        html = main.return_wall_lighting_html("/cruxwledbridge")
+        html = main.return_wall_lighting_html("/cruxwledbridge", "fireworks")
 
         self.assertIn("fetch('/cruxwledbridge/wall_lighting_mode'", html)
+        self.assertIn("fetch('/cruxwledbridge/celebration_effect'", html)
+        self.assertIn("celebrationSelect.value = 'fireworks'", html)
         self.assertIn("Wand-Beleuchtungsmodus", html)
         self.assertIn("Dunkel – nur Boulder", html)
         self.assertIn("Hell – freie LEDs gedimmt", html)
@@ -720,6 +830,8 @@ class PathPrefixTests(unittest.TestCase):
 
         self.assertTrue(any(path == "/wall_lighting" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/wall_lighting_mode" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/celebration_effect" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/sent" and "POST" in methods for path, methods in routes))
         self.assertFalse(any(path in {"/toggle_gui", "/toggle_mode"} for path, _ in routes))
 
     def test_wall_lighting_mode_updates_server_state(self):
@@ -804,6 +916,9 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("Kletterwand – Punkte auswählen", wall_selector)
         self.assertIn("Wall lighting mode", wall_lighting)
         self.assertIn("Wand-Beleuchtungsmodus", wall_lighting)
+        self.assertIn("Moving rainbow", wall_lighting)
+        self.assertIn("Laufender Regenbogen", wall_lighting)
+        self.assertIn('<option value="off"', wall_lighting)
 
     def test_language_choice_is_loaded_and_persisted_in_browser_storage(self):
         html = main.return_wall_lighting_html()
@@ -937,7 +1052,7 @@ class WledTests(unittest.TestCase):
                     json={
                         "on": True,
                         "bri": 255,
-                        "seg": {"i": [1, "FF0000"]},
+                        "seg": {"fx": 0, "i": [1, "FF0000"]},
                     },
                 ),
             ],
@@ -957,6 +1072,7 @@ class WledTests(unittest.TestCase):
                     "on": True,
                     "bri": 255,
                     "seg": {
+                        "fx": 0,
                         "i": [
                             0,
                             "333333",
@@ -991,10 +1107,42 @@ class WledTests(unittest.TestCase):
                 json={
                     "on": True,
                     "bri": 255,
-                    "seg": {"i": [2, "FF0000", 3, "FF0000"]},
+                    "seg": {"fx": 0, "i": [2, "FF0000", 3, "FF0000"]},
                 },
             ),
         )
+
+    @patch("utils.requests.post")
+    def test_celebration_effect_uses_complete_controller_range(self, post):
+        post.return_value = Mock()
+
+        utils.playCelebrationEffect("rainbow")
+
+        post.assert_called_once_with(
+            "http://192.0.2.10/json/state",
+            json={
+                "on": True,
+                "bri": 255,
+                "tt": 0,
+                "seg": {
+                    "id": 0,
+                    "start": 0,
+                    "stop": 3,
+                    "on": True,
+                    "fx": 9,
+                    "sx": 180,
+                    "ix": 180,
+                },
+            },
+            timeout=2,
+        )
+
+    @patch("utils.requests.post")
+    def test_unknown_celebration_effect_is_rejected(self, post):
+        with self.assertRaisesRegex(ValueError, "Unknown celebration effect"):
+            utils.playCelebrationEffect("unknown")
+
+        post.assert_not_called()
 
     @patch("utils.requests.post")
     def test_light_id_uses_matching_controller_range(self, post):

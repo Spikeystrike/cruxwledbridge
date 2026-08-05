@@ -3,6 +3,14 @@ import numpy as np
 from config import config
 
 
+CELEBRATION_EFFECTS = {
+    "rainbow": {"fx": 9, "sx": 180, "ix": 180},
+    "fireworks": {"fx": 42, "sx": 180, "ix": 220},
+    "color_twinkles": {"fx": 74, "sx": 170, "ix": 220},
+    "pride": {"fx": 63, "sx": 170, "ix": 190},
+}
+
+
 def wall_hold_key(wall_id, hold_id):
     """Return the database key for a hold on a specific wall."""
     return f"{wall_id}_{hold_id}"
@@ -173,9 +181,37 @@ def sendLightToBoulderwall(holds, mode="dark"):
         if pixels:
             requests.post(
                 controller["url"],
-                json={"on": True, "bri": 255, "seg": {"i": pixels}},
+                # Explicitly return the segment to Solid. A celebration may
+                # have left a WLED effect active before this state is restored.
+                json={"on": True, "bri": 255, "seg": {"fx": 0, "i": pixels}},
             )
     return led
+
+
+def playCelebrationEffect(effect):
+    """Run a native WLED effect over the complete range of every controller."""
+    settings = CELEBRATION_EFFECTS.get(effect)
+    if settings is None:
+        raise ValueError(f"Unknown celebration effect: {effect}")
+
+    for controller in _wled_controllers():
+        led_count = controller["end"] - controller["start"] + 1
+        requests.post(
+            controller["url"],
+            json={
+                "on": True,
+                "bri": 255,
+                "tt": 0,
+                "seg": {
+                    "id": 0,
+                    "start": 0,
+                    "stop": led_count,
+                    "on": True,
+                    **settings,
+                },
+            },
+            timeout=2,
+        )
 
 
 def lightUpHoldId(holdid, color):
