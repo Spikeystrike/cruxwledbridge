@@ -48,7 +48,7 @@ class AccessLoggingTests(unittest.TestCase):
             }
         )
 
-    def test_access_logger_starts_with_compact_datetime(self):
+    def test_access_logger_places_compact_datetime_after_level(self):
         handler = next(
             handler
             for handler in main.access_logger.handlers
@@ -66,8 +66,22 @@ class AccessLoggingTests(unittest.TestCase):
 
         self.assertRegex(
             handler.format(record),
-            r"^\d{8}-\d{6} INFO: message$",
+            r"^INFO: \d{8}-\d{6} message$",
         )
+
+    def test_lifespan_disables_uvicorn_access_log(self):
+        uvicorn_access_logger = logging.getLogger("uvicorn.access")
+        previous_disabled = uvicorn_access_logger.disabled
+        uvicorn_access_logger.disabled = False
+
+        async def enter_lifespan():
+            async with main.app.router.lifespan_context(main.app):
+                self.assertTrue(uvicorn_access_logger.disabled)
+
+        try:
+            asyncio.run(enter_lifespan())
+        finally:
+            uvicorn_access_logger.disabled = previous_disabled
 
     def test_regular_access_log_keeps_original_request_information(self):
         request = self.make_request(path="/wall_lighting", method="GET")

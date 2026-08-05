@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
 COPY ./ /code/app
 
-CMD ["fastapi", "run", "app/main.py", "--port", "80", "--proxy-headers"]
+CMD ["uvicorn", "main:app", "--app-dir", "/code/app", "--host", "0.0.0.0", "--port", "80", "--proxy-headers", "--no-access-log"]
 
 # If running behind a proxy like Nginx or Traefik add --proxy-headers
-# CMD ["fastapi", "run", "app/main.py", "--port", "80", "--proxy-headers"]
+# CMD ["uvicorn", "main:app", "--app-dir", "/code/app", "--host", "0.0.0.0", "--port", "80", "--proxy-headers", "--no-access-log"]

@@ -2,6 +2,7 @@ from fastapi.exceptions import RequestValidationError
 import uvicorn
 import logging
 import os
+from contextlib import asynccontextmanager
 from http import HTTPStatus
 from html import escape
 from urllib.parse import quote
@@ -71,7 +72,21 @@ def normalize_path_prefix(value: str) -> str:
 
 
 APP_PATH_PREFIX = normalize_path_prefix(os.getenv("APP_PATH_PREFIX", ""))
-app = FastAPI(root_path=APP_PATH_PREFIX)
+
+
+def disable_uvicorn_access_logging():
+    # Uvicorn/FastAPI CLI can configure logging after this module is imported.
+    # Disable its context-free access line again during application startup.
+    logging.getLogger("uvicorn.access").disabled = True
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    disable_uvicorn_access_logging()
+    yield
+
+
+app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
 wall_lighting_mode = "dark"  # "dark" or "bright"
 
@@ -89,7 +104,7 @@ def configure_access_logger():
         handler.cruxwledbridge_access_handler = True
         handler.setFormatter(
             logging.Formatter(
-                "%(asctime)s INFO: %(message)s",
+                "INFO: %(asctime)s %(message)s",
                 datefmt="%Y%m%d-%H%M%S",
             )
         )
@@ -97,7 +112,7 @@ def configure_access_logger():
 
     # The application emits the access log itself so it can add climb details.
     # Disable Uvicorn's otherwise identical, but context-free, access line.
-    logging.getLogger("uvicorn.access").disabled = True
+    disable_uvicorn_access_logging()
     return access_logger
 
 
