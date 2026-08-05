@@ -1,19 +1,28 @@
 from fastapi.exceptions import RequestValidationError
 import uvicorn
 import logging
-from fastapi import FastAPI, Request, logger
+import os
+from html import escape
+from urllib.parse import quote
+from fastapi import FastAPI, HTTPException, Request, logger
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, HttpUrl
 from typing import List, Optional
 import json
-from utils import ledCalculation, sendLightToBoulderwall, lightUpHoldId, generate_grid
+from utils import (
+    generate_grid,
+    ledCalculation,
+    lightUpHoldId,
+    sendLightToBoulderwall,
+    wall_hold_key,
+)
 from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import JSON
 import requests
 from templates.toggle_gui import returntogglehtml
 from templates.wallselector import returnwallhtml
-import config
+from config import config
 Base = declarative_base()
 # SQLAlchemy Model for Wall
 class Hold2ledDB(Base):
@@ -38,14 +47,24 @@ class WallDB(Base):
     hold2led = Column(JSON, nullable=True)  # Store hold2led mapping as JSON
 
 # SQLite engine and session setup
-DATABASE_URL = "sqlite:///./app.db"  # SQLite DB file
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////code/db/app.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 token = config.token
 auth_header =  {"Authorization":  token}
 # Create all tables
 Base.metadata.create_all(bind=engine)
-app = FastAPI()
+
+
+def normalize_path_prefix(value: str) -> str:
+    value = value.strip()
+    if not value or value == "/":
+        return ""
+    return f"/{value.strip('/')}"
+
+
+APP_PATH_PREFIX = normalize_path_prefix(os.getenv("APP_PATH_PREFIX", ""))
+app = FastAPI(root_path=APP_PATH_PREFIX)
 
 light_mode = "dark" # "dark" or "bright"
 
@@ -111,8 +130,10 @@ class WallTranslation(BaseModel):
     p4y: int
     r: int 
     c: int
+    alternating: bool = False
 class Climb(BaseModel):
     id: int
+    wall_id: int
     angle: Optional[int]
     color: Optional[str]
     created_at: Optional[str]
@@ -150,7 +171,8 @@ async def viewed(payload: PayL):
         holds = {}
         db = SessionLocal()
         for hold in climb.holds:
-            hit = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold.id).first()
+            hold_key = wall_hold_key(climb.wall_id, hold.id)
+            hit = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold_key).first()
             if hit:
                 holds[hit.ledid] = hold.hold_type
         sendLightToBoulderwall(holds, light_mode)
@@ -175,7 +197,7 @@ async def toggle_light_mode(payload: Mode):
 
 @app.get("/toggle_gui", response_class=HTMLResponse)
 async def get_toggle_gui():
-    html_content = returntogglehtml()
+    html_content = returntogglehtml(APP_PATH_PREFIX)
     return HTMLResponse(content=html_content)
 
 @app.get("/lightID/{color}/{led_id}")
@@ -185,25 +207,46 @@ async def get_light_id(color: str, led_id: int):
     return {"led_id": led_id, "color": color}
 @app.get("/listwalls")
 async def list_walls(gym: str = ""):
-    db = SessionLocal()
-    if str != "":
-        result= requests.get("https://www.cruxapp.ca/api/v1/gyms/"+gym+"/gym_walls", headers=auth_header, verify=False)
-        walls = json.loads(result.text)
-        html_content = "<h1>Wall Selector</h1>"
-        for wall in walls:
-            html_content += f'<div style="margin-bottom:20px;"><h2>{wall["name"]}</h2><a href="/wallcreation?id={wall["id"]}"><img src="{wall["image_url"]}" alt="{wall["name"]}" style="max-width:300px;"></a></div>'
-        db.close()
-        return HTMLResponse(content=html_content)        
-    else:
-        return {
-            "message": "Please send a gym"};
+    gym = gym.strip()
+    if not gym:
+        raise HTTPException(status_code=400, detail="Please send a gym slug")
+
+    try:
+        result = requests.get(
+            f"https://www.cruxapp.ca/api/v1/gyms/{quote(gym, safe='')}/gym_walls",
+            headers=auth_header,
+            verify=False,
+            timeout=15,
+        )
+        result.raise_for_status()
+        walls = result.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Could not load walls from Crux") from exc
+
+    if not isinstance(walls, list) or not all(isinstance(wall, dict) for wall in walls):
+        raise HTTPException(status_code=502, detail="Unexpected gym walls response from Crux")
+
+    html_content = "<h1>Wall Selector</h1>"
+    for wall in walls:
+        if "id" not in wall or "name" not in wall:
+            raise HTTPException(status_code=502, detail="Incomplete wall data from Crux")
+        wall_id = quote(str(wall["id"]), safe="")
+        wall_name = escape(str(wall["name"]))
+        image_url = escape(str(wall.get("image_url") or ""), quote=True)
+        html_content += (
+            f'<div style="margin-bottom:20px;"><h2>{wall_name}</h2>'
+            f'<a href="{APP_PATH_PREFIX}/wallcreation?id={wall_id}"><img src="{image_url}" '
+            f'alt="{wall_name}" style="max-width:300px;"></a></div>'
+        )
+    return HTMLResponse(content=html_content)
+
 @app.get ("/wallcreation")
 async def wall_creation(id: str = ""):
-    db = SessionLocal()
-
-    if str != "":
+    id = id.strip()
+    if id:
         result = requests.get("https://www.cruxapp.ca/api/v1/gym_walls/"+id, headers=auth_header, verify=False)
         wall = json.loads(result.text)
+        db = SessionLocal()
         existing_wall = db.query(WallDB).filter(WallDB.id == wall['id']).first()
 
         if existing_wall:
@@ -237,11 +280,10 @@ async def wall_creation(id: str = ""):
 
         db.commit()  # Save changes to the database
         db.close()
-        html_content = returnwallhtml(wall)
+        html_content = returnwallhtml(wall, APP_PATH_PREFIX)
         return HTMLResponse(content=html_content)        
     else:
-        return {
-            "message": "Please send a id"};
+        raise HTTPException(status_code=400, detail="Please send a wall id")
 
 
 
@@ -259,17 +301,30 @@ async def define_holds(payload: WallTranslation):
     c = payload.c 
     r = payload.r
     existing_wall = db.query(WallDB).filter(WallDB.id == payload.wallid).first()
-    grid = generate_grid(ul, ur, lr, ll, r, c) # lu, ru, rb, lb
+    try:
+        grid = generate_grid(
+            ul,
+            ur,
+            lr,
+            ll,
+            r,
+            c,
+            alternating=payload.alternating,
+        )  # lu, ru, rb, lb
+    except ValueError as exc:
+        db.close()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     holds2led = ledCalculation(lr, ll, ur, ul, c, r, existing_wall.holds, grid )
     for h in holds2led:
-        existing_hold = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == h).first()
+        hold_key = wall_hold_key(payload.wallid, h)
+        existing_hold = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold_key).first()
         if existing_hold:
             existing_hold.ledid = holds2led[h]
 
 
         else:
             hold2db = Hold2ledDB(
-                holdid=h,
+                holdid=hold_key,
                 ledid=holds2led[h]
             )
             db.add(hold2db)

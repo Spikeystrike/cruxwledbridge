@@ -1,4 +1,4 @@
-def returntogglehtml():
+def returntogglehtml(path_prefix=""):
     html= """
     <!DOCTYPE html>
     <html lang="de">
@@ -30,7 +30,7 @@ def returntogglehtml():
                 const statusDiv = document.getElementById('status');
                 statusDiv.textContent = 'Wird umgeschaltet...';
                 try {
-                    const response = await fetch('/toggle_mode', {
+                    const response = await fetch('__PATH_PREFIX__/toggle_mode', {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -53,4 +53,4 @@ def returntogglehtml():
     </body>
     </html>
     """
-    return html
+    return html.replace("__PATH_PREFIX__", path_prefix)

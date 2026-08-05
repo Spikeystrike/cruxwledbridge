@@ -1,4 +1,4 @@
-def returnwallhtml(wall):
+def returnwallhtml(wall, path_prefix=""):
     html_content = f"""
         
         <!DOCTYPE html>
@@ -99,7 +99,12 @@ def returnwallhtml(wall):
                 <input type="number" id="rows" name="rows" placeholder="Anzahl der Reihen" min="1">
                 <label for="columns">C: </label>
                 <input type="number" id="columns" name="columns" placeholder="Anzahl der Spalten" min="1">
+                <label for="alternating">
+                    <input type="checkbox" id="alternating" name="alternating">
+                    Alternierendes Raster
+                </label>
             </div>
+            <p>Beim alternierenden Raster muss C gerade sein. Bei C=22 nutzt jede Reihe 11 Punkte; die verwendeten Spalten wechseln von Reihe zu Reihe.</p>
             <p>Bitte klicke die 4 Eckpunkte in der Reihenfolge an: <b>Links-Oben, Rechts-Oben, Rechts-Unten, Links-Unten</b>.</p>
 
             <div id="image-container">
@@ -159,9 +164,15 @@ def returnwallhtml(wall):
 
                     const r = parseInt(rows.value);
                     const c = parseInt(columns.value);
+                    const alternating = document.getElementById('alternating').checked;
 
                     if (isNaN(r) || isNaN(c)) {{
                         alert('Bitte geben Sie gültige Werte für R und C ein.');
+                        return;
+                    }}
+
+                    if (alternating && (c < 2 || c % 2 !== 0)) {{
+                        alert('Für ein alternierendes Raster muss C eine gerade Zahl sein.');
                         return;
                     }}
 
@@ -176,13 +187,14 @@ def returnwallhtml(wall):
                         p4y: points[3].y,
                         r: r,
                         c: c,
+                        alternating: alternating,
                         wallid: { wall['id'] }
                     }};
                     
                     console.log('Sende folgende Daten:', payload);
 
                     try {{
-                        const response = await fetch('/defineholds', {{
+                        const response = await fetch('{path_prefix}/defineholds', {{
                             method: 'POST',
                             headers: {{
                                 'Content-Type': 'application/json',
