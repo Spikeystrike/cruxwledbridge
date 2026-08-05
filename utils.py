@@ -143,12 +143,11 @@ def ledCalculation(lr, ll, ur, ul, c, r, holds, grid):
 
 def sendLightToBoulderwall(holds, mode="dark"):
     colors = config.colors
-    # Hold2ledDB already stores the physical/global LED ID calculated by wall
-    # creation. Do not map it a second time through a static lookup table.
-    led = {
-        led_id: colors[hold_type]
-        for led_id, hold_type in holds.items()
-    }
+    hole2LEDS = config.hole2LEDS
+    led = {}
+    for hole_id, hold_type in holds.items():
+        for physical_led_id in hole2LEDS[hole_id]:
+            led[physical_led_id] = colors[hold_type]
 
     controllers = _wled_controllers()
     for controller in controllers:

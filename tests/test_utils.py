@@ -15,6 +15,7 @@ config.colors = {"start": "FF0000"}
 config.wled_controllers = [
     {"ip": "192.0.2.10", "start": 100, "end": 102},
 ]
+config.hole2LEDS = {0: [100], 1: [101], 2: [102]}
 config_package.config = config
 sys.modules["config"] = config_package
 sys.modules["config.config"] = config
@@ -506,12 +507,13 @@ class WledTests(unittest.TestCase):
         config.wled_controllers = [
             {"ip": "192.0.2.10", "start": 100, "end": 102},
         ]
+        config.hole2LEDS = {0: [100], 1: [101], 2: [102]}
 
     @patch("utils.requests.post")
     def test_sends_global_led_as_controller_local_id(self, post):
         post.return_value = Mock()
 
-        result = utils.sendLightToBoulderwall({101: "start"})
+        result = utils.sendLightToBoulderwall({1: "start"})
 
         self.assertEqual(result, {101: "FF0000"})
         self.assertEqual(
@@ -536,7 +538,7 @@ class WledTests(unittest.TestCase):
     def test_bright_mode_sets_unselected_leds_to_dim_white(self, post):
         post.return_value = Mock()
 
-        utils.sendLightToBoulderwall({101: "start"}, mode="bright")
+        utils.sendLightToBoulderwall({1: "start"}, mode="bright")
 
         self.assertEqual(
             post.call_args_list[-1],
@@ -555,6 +557,32 @@ class WledTests(unittest.TestCase):
                             "333333",
                         ],
                     },
+                },
+            ),
+        )
+
+    @patch("utils.requests.post")
+    def test_hole_mapping_can_skip_physical_leds_and_use_multiple_leds(self, post):
+        post.return_value = Mock()
+        config.hole2LEDS = {
+            0: [100],
+            1: [102, 103],
+        }
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 103},
+        ]
+
+        result = utils.sendLightToBoulderwall({1: "start"})
+
+        self.assertEqual(result, {102: "FF0000", 103: "FF0000"})
+        self.assertEqual(
+            post.call_args_list[-1],
+            call(
+                "http://192.0.2.10/json/state",
+                json={
+                    "on": True,
+                    "bri": 255,
+                    "seg": {"i": [2, "FF0000", 3, "FF0000"]},
                 },
             ),
         )

@@ -23,3 +23,9 @@ colors = {
     "finish": "FF0000",
     "zone": "a64d79",
 }
+
+# Wall Creation assigns these logical hole IDs according to the selected cable
+# direction. Map each logical hole to the physical LED IDs on the cable here.
+# The default is one-to-one for 400 holes. You can skip physical IDs or assign
+# several LEDs to one hole, e.g. {0: [0], 1: [2, 3]} leaves LED 1 unused.
+hole2LEDS = {hole_id: [hole_id] for hole_id in range(400)}
