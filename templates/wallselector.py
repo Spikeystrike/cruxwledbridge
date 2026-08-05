@@ -144,6 +144,7 @@ def returnwallhtml(wall, path_prefix=""):
             <script>
                 // JavaScript bleibt unverändert wie in test.html
                 const imageContainer = document.getElementById('image-container');
+                const climbingImage = document.getElementById('climbing-image');
                 const submitBtn = document.getElementById('submit-btn');
                 const statusDiv = document.getElementById('status');
                 const alternatingCheckbox = document.getElementById('alternating');
@@ -160,6 +161,22 @@ def returnwallhtml(wall, path_prefix=""):
                     alternatingStart.disabled = !alternatingCheckbox.checked;
                 }});
 
+                function imageToDisplay(point) {{
+                    const rect = climbingImage.getBoundingClientRect();
+                    return {{
+                        x: point.x * rect.width / climbingImage.naturalWidth,
+                        y: point.y * rect.height / climbingImage.naturalHeight,
+                    }};
+                }}
+
+                function displayToImage(x, y) {{
+                    const rect = climbingImage.getBoundingClientRect();
+                    return {{
+                        x: Math.round(x * climbingImage.naturalWidth / rect.width),
+                        y: Math.round(y * climbingImage.naturalHeight / rect.height),
+                    }};
+                }}
+
                 function renderGrid() {{
                     document.querySelectorAll('.grid-point').forEach(gp => gp.remove());
                     if (!renderedPositions) return;
@@ -172,13 +189,14 @@ def returnwallhtml(wall, path_prefix=""):
 
                     for (const positionIdText in renderedPositions) {{
                         const [x, y] = renderedPositions[positionIdText];
+                        const displayPoint = imageToDisplay({{ x, y }});
                         const positionId = Number(positionIdText);
                         const ledId = positionLedIds[positionIdText];
                         const gridPointElement = document.createElement('div');
                         const excluded = excludedPositionIds.has(positionId);
                         const classes = ['grid-point'];
-                        gridPointElement.style.left = `${{x}}px`;
-                        gridPointElement.style.top = `${{y}}px`;
+                        gridPointElement.style.left = `${{displayPoint.x}}px`;
+                        gridPointElement.style.top = `${{displayPoint.y}}px`;
                         gridPointElement.dataset.positionId = positionIdText;
 
                         if (excluded) {{
@@ -220,10 +238,11 @@ def returnwallhtml(wall, path_prefix=""):
                 function updateUI() {{
                     document.querySelectorAll('.point').forEach(p => p.remove());
                     points.forEach(p => {{
+                        const displayPoint = imageToDisplay(p);
                         const pointElement = document.createElement('div');
                         pointElement.className = 'point';
-                        pointElement.style.left = `${{p.x}}px`;
-                        pointElement.style.top = `${{p.y}}px`;
+                        pointElement.style.left = `${{displayPoint.x}}px`;
+                        pointElement.style.top = `${{displayPoint.y}}px`;
                         imageContainer.appendChild(pointElement);
                     }});
                     statusDiv.textContent = `Punkte: ${{points.length}} / 4`;
@@ -236,12 +255,18 @@ def returnwallhtml(wall, path_prefix=""):
 
                 imageContainer.addEventListener('click', (event) => {{
                     if (points.length < 4) {{
-                        const rect = imageContainer.getBoundingClientRect();
+                        const rect = climbingImage.getBoundingClientRect();
                         const x = event.clientX - rect.left;
                         const y = event.clientY - rect.top;
-                        points.push({{ x: Math.round(x), y: Math.round(y) }});
+                        points.push(displayToImage(x, y));
                         updateUI();
                     }}
+                }});
+
+                window.addEventListener('resize', () => {{
+                    updateUI();
+                    renderGrid();
+                    updateGridStatus();
                 }});
 
                 imageContainer.addEventListener('contextmenu', (event) => {{

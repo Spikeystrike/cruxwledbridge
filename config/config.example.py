@@ -23,8 +23,3 @@ colors = {
     "finish": "FF0000",
     "zone": "a64d79",
 }
-
-# Crux holds are stored in app.db as <wall_id>_<hold_id>. This mapping is the
-# next step: logical grid LED ID -> physical LED IDs. Lists allow multiple LEDs
-# per hold. For a 20x20 wall with exactly one physical LED per hold, use 1:1 IDs.
-hole2LEDS = {led_id: [led_id] for led_id in range(400)}

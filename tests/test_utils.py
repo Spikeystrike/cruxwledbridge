@@ -12,7 +12,6 @@ config_package = types.ModuleType("config")
 config = types.ModuleType("config.config")
 config.token = "test-token"
 config.colors = {"start": "FF0000"}
-config.hole2LEDS = {7: [101]}
 config.wled_controllers = [
     {"ip": "192.0.2.10", "start": 100, "end": 102},
 ]
@@ -368,6 +367,45 @@ class DefineHoldsTests(unittest.TestCase):
         self.assertEqual(mapping.ledid, 0)
         db.close()
 
+    def test_top_right_vertical_layout_skips_excluded_positions_in_cable_order(self):
+        payload = main.WallTranslation(
+            wallid=self.wall_id,
+            p1x=0,
+            p1y=0,
+            p2x=20,
+            p2y=0,
+            p3x=20,
+            p3y=20,
+            p4x=0,
+            p4y=20,
+            r=3,
+            c=3,
+            led_start_corner="top_right",
+            led_direction="vertical",
+            # x o o
+            # x x o
+            # x x x
+            excluded_position_ids=[0, 1, 5],
+        )
+
+        result = asyncio.run(main.define_holds(payload))
+
+        self.assertEqual(
+            result["grid"],
+            {
+                0: (20, 20),  # unten rechts
+                1: (10, 20),  # unten mitte
+                2: (10, 10),  # mitte mitte
+                3: (0, 0),    # oben links
+                4: (0, 10),   # mitte links
+                5: (0, 20),   # unten links
+            },
+        )
+        self.assertEqual(
+            result["position_led_ids"],
+            {2: 0, 3: 1, 4: 2, 6: 3, 7: 4, 8: 5},
+        )
+
 
 class PathPrefixTests(unittest.TestCase):
     def test_normalizes_path_prefix(self):
@@ -446,11 +484,25 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("excluded_position_ids: Array.from(excludedPositionIds)", html)
         self.assertIn("Auswahl speichern", html)
 
+    def test_wall_selector_maps_display_pixels_to_original_image_pixels(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+        )
+
+        self.assertIn("function displayToImage(x, y)", html)
+        self.assertIn("x * climbingImage.naturalWidth / rect.width", html)
+        self.assertIn("y * climbingImage.naturalHeight / rect.height", html)
+        self.assertIn("function imageToDisplay(point)", html)
+        self.assertIn("point.x * rect.width / climbingImage.naturalWidth", html)
+        self.assertIn("points.push(displayToImage(x, y))", html)
+        self.assertIn("const rect = climbingImage.getBoundingClientRect()", html)
+        self.assertIn("window.addEventListener('resize'", html)
+
 
 class WledTests(unittest.TestCase):
     def setUp(self):
         config.colors = {"start": "FF0000"}
-        config.hole2LEDS = {7: [101]}
         config.wled_controllers = [
             {"ip": "192.0.2.10", "start": 100, "end": 102},
         ]
@@ -459,7 +511,7 @@ class WledTests(unittest.TestCase):
     def test_sends_global_led_as_controller_local_id(self, post):
         post.return_value = Mock()
 
-        result = utils.sendLightToBoulderwall({7: "start"})
+        result = utils.sendLightToBoulderwall({101: "start"})
 
         self.assertEqual(result, {101: "FF0000"})
         self.assertEqual(
@@ -484,7 +536,7 @@ class WledTests(unittest.TestCase):
     def test_bright_mode_sets_unselected_leds_to_dim_white(self, post):
         post.return_value = Mock()
 
-        utils.sendLightToBoulderwall({7: "start"}, mode="bright")
+        utils.sendLightToBoulderwall({101: "start"}, mode="bright")
 
         self.assertEqual(
             post.call_args_list[-1],
