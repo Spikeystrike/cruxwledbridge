@@ -132,6 +132,8 @@ class WallTranslation(BaseModel):
     c: int
     alternating: bool = False
     alternating_start_column: int = 0
+    led_start_corner: str = "bottom_left"
+    led_direction: str = "vertical"
     excluded_position_ids: List[int] = Field(default_factory=list)
 class Climb(BaseModel):
     id: int
@@ -313,6 +315,8 @@ async def define_holds(payload: WallTranslation):
             c,
             alternating=payload.alternating,
             alternating_start_column=payload.alternating_start_column,
+            led_start_corner=payload.led_start_corner,
+            led_direction=payload.led_direction,
         )  # lu, ru, rb, lb
     except ValueError as exc:
         db.close()

@@ -53,6 +53,8 @@ def generate_grid(
     c,
     alternating=False,
     alternating_start_column=0,
+    led_start_corner="bottom_left",
+    led_direction="vertical",
 ):
     if r < 1 or c < 1:
         raise ValueError("Grid rows and columns must be positive")
@@ -60,6 +62,10 @@ def generate_grid(
         raise ValueError("Alternating grids require at least two columns")
     if alternating_start_column not in (0, 1):
         raise ValueError("Alternating grid start column must be 0 or 1")
+    if led_start_corner not in {"top_left", "top_right", "bottom_left", "bottom_right"}:
+        raise ValueError("LED start corner must be top_left, top_right, bottom_left, or bottom_right")
+    if led_direction not in {"horizontal", "vertical"}:
+        raise ValueError("LED direction must be horizontal or vertical")
 
     row_columns = []
     for row_from_top in range(r):
@@ -69,16 +75,7 @@ def generate_grid(
         else:
             row_columns.append(list(range(c)))
 
-    # With an odd number of possible columns, alternating rows contain different
-    # numbers of LEDs. Calculate each row's offset explicitly so the snake IDs
-    # still remain contiguous.
-    row_offsets = {}
-    next_led_id = 0
-    for row_from_top in reversed(range(r)):
-        row_offsets[row_from_top] = next_led_id
-        next_led_id += len(row_columns[row_from_top])
-
-    grid = {}  # Dictionary zur Speicherung der Punkte, Schlüssel ist die ID
+    positions = {}
     # Interpolate die Positionen für alle Reihen (von links oben nach links unten und rechts oben nach rechts unten)
     for i in range(r):
         # Division durch Null vermeiden, wenn es nur eine Reihe gibt
@@ -86,28 +83,46 @@ def generate_grid(
         left_point = (1 - t) * np.array(lu) + t * np.array(lb)  # Position entlang der linken Seite
         right_point = (1 - t) * np.array(ru) + t * np.array(rb)  # Position entlang der rechten Seite
 
-        # Reihe von unten gezählt (0-basiert)
-        row_from_bottom = r - 1 - i
-
         # Im alternierenden Raster wechseln die verwendeten Spalten je Reihe.
         # Bei ungeradem C darf sich deshalb die Anzahl aktiver Punkte je Reihe
         # um eins unterscheiden.
         column_indices = row_columns[i]
-        active_columns = len(column_indices)
-
         # Interpolate die Punkte innerhalb der aktuellen Reihe (von links nach rechts)
-        for active_column, j in enumerate(column_indices):
+        for j in column_indices:
             # Division durch Null vermeiden, wenn es nur eine Spalte gibt
             s = j / (c - 1) if c > 1 else 0.0
             point = np.rint((1 - s) * left_point + s * right_point).astype(int)  # Position entlang der aktuellen Zeile
 
-            # Berechne die ID in "Schlangenlinien"-Form von unten
-            if (row_from_bottom % 2) == 1:  # Ungerade Reihen von unten (1, 3, ...): von links nach rechts
-                led_id = row_offsets[i] + active_column
-            else:  # Gerade Reihen von unten (0, 2, ...): von rechts nach links
-                led_id = row_offsets[i] + (active_columns - 1 - active_column)
-            
-            grid[led_id] = (point[0].item(), point[1].item())
+            positions[(i, j)] = (point[0].item(), point[1].item())
+
+    starts_top = led_start_corner.startswith("top_")
+    starts_left = led_start_corner.endswith("_left")
+
+    # Sort the logical positions in physical cable order. The direction selects
+    # whether the cable snakes through rows or columns; the chosen corner fixes
+    # both LED 0 and the direction of the first run.
+    if led_direction == "horizontal":
+        stripes = sorted({row for row, _ in positions}, reverse=not starts_top)
+        stripe_positions = lambda stripe: [(row, column) for row, column in positions if row == stripe]
+        first_run_ascending = starts_left
+        sort_axis = lambda position: position[1]
+    else:
+        stripes = sorted({column for _, column in positions}, reverse=not starts_left)
+        stripe_positions = lambda stripe: [(row, column) for row, column in positions if column == stripe]
+        first_run_ascending = starts_top
+        sort_axis = lambda position: position[0]
+
+    cable_order = []
+    for stripe_index, stripe in enumerate(stripes):
+        ascending = first_run_ascending if stripe_index % 2 == 0 else not first_run_ascending
+        cable_order.extend(
+            sorted(stripe_positions(stripe), key=sort_axis, reverse=not ascending)
+        )
+
+    grid = {
+        led_id: positions[position]
+        for led_id, position in enumerate(cable_order)
+    }
     return grid
 
 

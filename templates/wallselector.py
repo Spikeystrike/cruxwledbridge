@@ -116,8 +116,21 @@ def returnwallhtml(wall, path_prefix=""):
                     <option value="0">Nicht eingerückt</option>
                     <option value="1">Eingerückt</option>
                 </select>
+                <label for="led-start-corner">LED 0:</label>
+                <select id="led-start-corner" name="led-start-corner">
+                    <option value="top_left">Oben links</option>
+                    <option value="top_right">Oben rechts</option>
+                    <option value="bottom_left" selected>Unten links</option>
+                    <option value="bottom_right">Unten rechts</option>
+                </select>
+                <label for="led-direction">Kabelverlauf:</label>
+                <select id="led-direction" name="led-direction">
+                    <option value="horizontal">Horizontal (zeilenweise)</option>
+                    <option value="vertical" selected>Vertikal (spaltenweise)</option>
+                </select>
             </div>
             <p>Beim alternierenden Raster ist C die Anzahl aller möglichen Spalten. C darf gerade oder ungerade sein; die verwendeten Spalten wechseln von Reihe zu Reihe.</p>
+            <p>Die LED-Nummerierung beginnt bei LED 0 in der gewählten Ecke und folgt dem Kabel schlangenförmig horizontal oder vertikal.</p>
             <p>Bitte klicke die 4 Eckpunkte in der Reihenfolge an: <b>Links-Oben, Rechts-Oben, Rechts-Unten, Links-Unten</b>.</p>
             <p>Nach dem Berechnen kannst du Rasterpunkte anklicken, um sie abzuwählen oder wieder zu aktivieren. Klicke danach auf <b>Auswahl speichern</b>.</p>
 
@@ -249,6 +262,8 @@ def returnwallhtml(wall, path_prefix=""):
                     const c = parseInt(columns.value);
                     const alternating = document.getElementById('alternating').checked;
                     const alternatingStartColumn = parseInt(alternatingStart.value);
+                    const ledStartCorner = document.getElementById('led-start-corner').value;
+                    const ledDirection = document.getElementById('led-direction').value;
 
                     if (isNaN(r) || isNaN(c)) {{
                         alert('Bitte geben Sie gültige Werte für R und C ein.');
@@ -266,6 +281,8 @@ def returnwallhtml(wall, path_prefix=""):
                         c: c,
                         alternating: alternating,
                         alternatingStartColumn: alternatingStartColumn,
+                        ledStartCorner: ledStartCorner,
+                        ledDirection: ledDirection,
                     }});
                     if (lastGridSettings !== null && gridSettings !== lastGridSettings) {{
                         excludedPositionIds.clear();
@@ -289,6 +306,8 @@ def returnwallhtml(wall, path_prefix=""):
                         c: c,
                         alternating: alternating,
                         alternating_start_column: alternatingStartColumn,
+                        led_start_corner: ledStartCorner,
+                        led_direction: ledDirection,
                         excluded_position_ids: Array.from(excludedPositionIds),
                         wallid: { wall['id'] }
                     }};

@@ -72,6 +72,8 @@ class GridGenerationTests(unittest.TestCase):
             3,
             6,
             alternating=True,
+            led_start_corner="bottom_right",
+            led_direction="horizontal",
         )
 
         self.assertEqual(
@@ -142,6 +144,88 @@ class GridGenerationTests(unittest.TestCase):
                 2,
                 1,
                 alternating=True,
+            )
+
+    def test_vertical_grid_can_start_top_right(self):
+        grid = utils.generate_grid(
+            (0, 0),
+            (20, 0),
+            (20, 10),
+            (0, 10),
+            2,
+            3,
+            led_start_corner="top_right",
+            led_direction="vertical",
+        )
+
+        self.assertEqual(
+            grid,
+            {
+                0: (20, 0),
+                1: (20, 10),
+                2: (10, 10),
+                3: (10, 0),
+                4: (0, 0),
+                5: (0, 10),
+            },
+        )
+
+    def test_default_cable_layout_starts_bottom_left_and_runs_vertically(self):
+        grid = utils.generate_grid(
+            (0, 0),
+            (20, 0),
+            (20, 10),
+            (0, 10),
+            2,
+            3,
+        )
+
+        self.assertEqual(
+            grid,
+            {
+                0: (0, 10),
+                1: (0, 0),
+                2: (10, 0),
+                3: (10, 10),
+                4: (20, 10),
+                5: (20, 0),
+            },
+        )
+
+    def test_all_start_corners_place_led_zero_at_requested_corner(self):
+        expected_led_zero = {
+            "top_left": (0, 0),
+            "top_right": (20, 0),
+            "bottom_left": (0, 10),
+            "bottom_right": (20, 10),
+        }
+
+        for direction in ("horizontal", "vertical"):
+            for corner, expected in expected_led_zero.items():
+                with self.subTest(direction=direction, corner=corner):
+                    grid = utils.generate_grid(
+                        (0, 0),
+                        (20, 0),
+                        (20, 10),
+                        (0, 10),
+                        2,
+                        3,
+                        led_start_corner=corner,
+                        led_direction=direction,
+                    )
+                    self.assertEqual(grid[0], expected)
+
+    def test_rejects_invalid_led_cable_settings(self):
+        with self.assertRaisesRegex(ValueError, "LED start corner"):
+            utils.generate_grid(
+                (0, 0), (20, 0), (20, 10), (0, 10), 2, 3,
+                led_start_corner="center",
+            )
+
+        with self.assertRaisesRegex(ValueError, "LED direction"):
+            utils.generate_grid(
+                (0, 0), (20, 0), (20, 10), (0, 10), 2, 3,
+                led_direction="diagonal",
             )
 
 
@@ -337,6 +421,20 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn('<option value="0">Nicht eingerückt</option>', html)
         self.assertIn('<option value="1">Eingerückt</option>', html)
         self.assertIn("alternating_start_column: alternatingStartColumn", html)
+
+    def test_wall_selector_offers_led_cable_layout(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+        )
+
+        self.assertIn('id="led-start-corner"', html)
+        self.assertIn('<option value="top_right">Oben rechts</option>', html)
+        self.assertIn('<option value="bottom_left" selected>Unten links</option>', html)
+        self.assertIn('id="led-direction"', html)
+        self.assertIn('<option value="vertical" selected>Vertikal (spaltenweise)</option>', html)
+        self.assertIn("led_start_corner: ledStartCorner", html)
+        self.assertIn("led_direction: ledDirection", html)
 
     def test_wall_selector_can_exclude_rendered_positions(self):
         html = main.returnwallhtml(
