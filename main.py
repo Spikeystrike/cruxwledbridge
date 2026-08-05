@@ -2,6 +2,7 @@ from fastapi.exceptions import RequestValidationError
 import uvicorn
 import logging
 import os
+from http import HTTPStatus
 from html import escape
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, logger
@@ -73,6 +74,81 @@ APP_PATH_PREFIX = normalize_path_prefix(os.getenv("APP_PATH_PREFIX", ""))
 app = FastAPI(root_path=APP_PATH_PREFIX)
 
 wall_lighting_mode = "dark"  # "dark" or "bright"
+
+
+def configure_access_logger():
+    access_logger = logging.getLogger("cruxwledbridge.access")
+    access_logger.setLevel(logging.INFO)
+    access_logger.propagate = False
+
+    if not any(
+        getattr(handler, "cruxwledbridge_access_handler", False)
+        for handler in access_logger.handlers
+    ):
+        handler = logging.StreamHandler()
+        handler.cruxwledbridge_access_handler = True
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s INFO: %(message)s",
+                datefmt="%Y%m%d-%H%M%S",
+            )
+        )
+        access_logger.addHandler(handler)
+
+    # The application emits the access log itself so it can add climb details.
+    # Disable Uvicorn's otherwise identical, but context-free, access line.
+    logging.getLogger("uvicorn.access").disabled = True
+    return access_logger
+
+
+access_logger = configure_access_logger()
+
+
+def format_access_log(request: Request, status_code: int) -> str:
+    client = request.client
+    if client:
+        host = client.host
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        client_address = f"{host}:{client.port}"
+    else:
+        client_address = "-"
+
+    path = request.url.path
+    if request.url.query:
+        path = f"{path}?{request.url.query}"
+
+    climb = getattr(request.state, "viewed_climb", None)
+    climb_details = ""
+    if climb:
+        climb_name = json.dumps(str(climb["name"]), ensure_ascii=False)
+        climb_details = (
+            f" climb_id={climb['id']}"
+            f" climb_name={climb_name}"
+            f" wall_id={climb['wall_id']}"
+        )
+
+    try:
+        reason = HTTPStatus(status_code).phrase
+    except ValueError:
+        reason = ""
+
+    return (
+        f'{client_address} - "{request.method} {path} '
+        f'HTTP/{request.scope.get("http_version", "1.1")}"'
+        f"{climb_details} {status_code} {reason}"
+    ).rstrip()
+
+
+@app.middleware("http")
+async def log_access(request: Request, call_next):
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        access_logger.info(format_access_log(request, status_code))
 
 def register_exception(app: FastAPI):
     @app.exception_handler(RequestValidationError)
@@ -174,10 +250,15 @@ async def root():
 
 
 @app.post("/viewed")
-async def viewed(payload: PayL):
+async def viewed(payload: PayL, request: Request):
     # Verarbeite den JSON-Payload
+    climb = payload.payload
+    request.state.viewed_climb = {
+        "id": climb.id,
+        "name": climb.name,
+        "wall_id": climb.wall_id,
+    }
     try:
-        climb = payload.payload
         holds = {}
         db = SessionLocal()
         for hold in climb.holds:
@@ -419,4 +500,4 @@ async def define_holds(payload: WallTranslation):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)

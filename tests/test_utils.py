@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 import types
@@ -25,6 +26,127 @@ import utils
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 import main
+
+
+class AccessLoggingTests(unittest.TestCase):
+    @staticmethod
+    def make_request(path="/viewed", method="POST"):
+        return main.Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode(),
+                "query_string": b"",
+                "root_path": "",
+                "headers": [],
+                "client": ("172.29.108.2", 57358),
+                "server": ("testserver", 80),
+            }
+        )
+
+    def test_access_logger_starts_with_compact_datetime(self):
+        handler = next(
+            handler
+            for handler in main.access_logger.handlers
+            if getattr(handler, "cruxwledbridge_access_handler", False)
+        )
+        record = logging.LogRecord(
+            "cruxwledbridge.access",
+            logging.INFO,
+            __file__,
+            1,
+            "message",
+            (),
+            None,
+        )
+
+        self.assertRegex(
+            handler.format(record),
+            r"^\d{8}-\d{6} INFO: message$",
+        )
+
+    def test_regular_access_log_keeps_original_request_information(self):
+        request = self.make_request(path="/wall_lighting", method="GET")
+
+        self.assertEqual(
+            main.format_access_log(request, 200),
+            '172.29.108.2:57358 - "GET /wall_lighting HTTP/1.1" 200 OK',
+        )
+
+    def test_access_middleware_logs_completed_response(self):
+        request = self.make_request(path="/", method="GET")
+        response = Mock(status_code=200)
+
+        async def call_next(received_request):
+            self.assertIs(received_request, request)
+            return response
+
+        with patch.object(main.access_logger, "info") as info:
+            returned_response = asyncio.run(main.log_access(request, call_next))
+
+        self.assertIs(returned_response, response)
+        info.assert_called_once_with(
+            '172.29.108.2:57358 - "GET / HTTP/1.1" 200 OK'
+        )
+
+    def test_viewed_access_log_identifies_climb_after_request(self):
+        request = self.make_request()
+        request.state.viewed_climb = {
+            "id": 321,
+            "name": 'Blue "Moon"',
+            "wall_id": 44,
+        }
+
+        self.assertEqual(
+            main.format_access_log(request, 200),
+            '172.29.108.2:57358 - "POST /viewed HTTP/1.1" '
+            'climb_id=321 climb_name="Blue \\"Moon\\"" wall_id=44 200 OK',
+        )
+
+    @patch("main.sendLightToBoulderwall")
+    @patch("main.SessionLocal")
+    def test_viewed_handler_adds_climb_context(self, session_local, send_lights):
+        request = self.make_request()
+        payload = main.PayL(
+            payload=main.Climb(
+                id=321,
+                wall_id=44,
+                angle=None,
+                color=None,
+                created_at=None,
+                description=None,
+                foot_rules=None,
+                grade="6B",
+                gym_name=None,
+                gym_slug=None,
+                holds=[],
+                image_height=None,
+                image_url="https://example.com/climb.jpg",
+                image_width=100,
+                name="Blue Moon",
+                number_of_comments=0,
+                number_of_sends=0,
+                sends=None,
+                setter_id=1,
+                setter_name="Setter",
+                unedited_image_url="https://example.com/climb-original.jpg",
+                unset_at=None,
+                updated_at="2026-08-06T00:00:00Z",
+            )
+        )
+
+        asyncio.run(main.viewed(payload, request))
+
+        self.assertEqual(
+            request.state.viewed_climb,
+            {"id": 321, "name": "Blue Moon", "wall_id": 44},
+        )
+        send_lights.assert_called_once_with({}, "dark")
+        session_local.return_value.close.assert_called_once_with()
 
 
 class WallHoldKeyTests(unittest.TestCase):
