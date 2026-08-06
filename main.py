@@ -251,14 +251,23 @@ def format_access_log(request: Request, status_code: int) -> str:
         path = f"{path}?{request.url.query}"
 
     climb = getattr(request.state, "viewed_climb", None)
+    if climb is None:
+        sent_climb = getattr(request.state, "sent_climb", None)
+        if sent_climb:
+            climb = {
+                "id": sent_climb["climb_id"],
+                "name": sent_climb["climb_name"],
+                "wall_id": sent_climb.get("wall_id"),
+            }
     climb_details = ""
     if climb:
         climb_name = json.dumps(str(climb["name"]), ensure_ascii=False)
         climb_details = (
             f" climb_id={climb['id']}"
             f" climb_name={climb_name}"
-            f" wall_id={climb['wall_id']}"
         )
+        if climb.get("wall_id") is not None:
+            climb_details += f" wall_id={climb['wall_id']}"
 
     try:
         reason = HTTPStatus(status_code).phrase
@@ -384,6 +393,7 @@ class PayL(BaseModel):
 class SentClimb(BaseModel):
     id: int
     name: str
+    wall_id: Optional[int] = None
 
 
 class ClimbSend(BaseModel):
@@ -449,6 +459,7 @@ async def sent(payload: SentPayL, request: Request):
         "send_id": send.id,
         "climb_id": send.climb.id,
         "climb_name": send.climb.name,
+        "wall_id": send.climb.wall_id,
     }
     started = schedule_celebration()
     return {

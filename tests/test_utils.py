@@ -121,6 +121,21 @@ class AccessLoggingTests(unittest.TestCase):
             'climb_id=321 climb_name="Blue \\"Moon\\"" wall_id=44 200 OK',
         )
 
+    def test_sent_access_log_identifies_climb_after_request(self):
+        request = self.make_request(path="/sent")
+        request.state.sent_climb = {
+            "send_id": 55,
+            "climb_id": 321,
+            "climb_name": 'Blue "Moon"',
+            "wall_id": 44,
+        }
+
+        self.assertEqual(
+            main.format_access_log(request, 200),
+            '172.29.108.2:57358 - "POST /sent HTTP/1.1" '
+            'climb_id=321 climb_name="Blue \\"Moon\\"" wall_id=44 200 OK',
+        )
+
     @patch("main.sendLightToBoulderwall")
     @patch("main.SessionLocal")
     def test_viewed_handler_adds_climb_context(self, session_local, send_lights):
@@ -191,7 +206,12 @@ class CelebrationTests(unittest.TestCase):
                 "created_at": "2026-08-06T01:00:00Z",
                 "repeat": False,
                 "send_date": "2026-08-06",
-                "climb": {"id": 321, "name": "Blue Moon", "grade": "6B"},
+                "climb": {
+                    "id": 321,
+                    "name": "Blue Moon",
+                    "grade": "6B",
+                    "wall_id": 44,
+                },
                 "user": {"id": 99, "name": "Climber"},
             }
         )
@@ -201,7 +221,12 @@ class CelebrationTests(unittest.TestCase):
         schedule.assert_called_once_with()
         self.assertEqual(
             request.state.sent_climb,
-            {"send_id": 55, "climb_id": 321, "climb_name": "Blue Moon"},
+            {
+                "send_id": 55,
+                "climb_id": 321,
+                "climb_name": "Blue Moon",
+                "wall_id": 44,
+            },
         )
         self.assertEqual(result["message"], "Celebration started")
 
