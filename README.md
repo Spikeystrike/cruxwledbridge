@@ -21,6 +21,7 @@ services:
       VIRTUAL_DEST: /
       APP_PATH_PREFIX: /cruxwledbridge
     volumes:
+      - /etc/localtime:/etc/localtime:ro
       - /share/Docker-Appdata/cruxwledbridge/db:/code/db
       - /share/Docker-Appdata/cruxwledbridge/config:/code/config
     networks:
@@ -31,7 +32,7 @@ networks:
     external: true
     name: ${PROXY_NETWORK:-nextcloud_proxy-tier}
 ```
-The SQLite database is stored at `/code/db/app.db`. The configuration file must be available as `/code/config/config.py` (for the example above: `/share/Docker-Appdata/cruxwledbridge/config/config.py`). Copy `config/config.example.py` to that location and adjust it before starting the container. Make sure the mounted host directories are readable or writable as required by the configured container user (`1018:100`).
+The SQLite database is stored at `/code/db/app.db`. The configuration file must be available as `/code/config/config.py` (for the example above: `/share/Docker-Appdata/cruxwledbridge/config/config.py`). Copy `config/config.example.py` to that location and adjust it before starting the container. Make sure the mounted host directories are readable or writable as required by the configured container user (`1018:100`). The read-only `/etc/localtime` mount makes log timestamps use the Docker host's local timezone instead of the container default, so no timezone is hard-coded in the application.
 
 Set the public hostname in a local `.env` file before starting the stack, for example `VIRTUAL_HOST=bridge.example.com`. The file is ignored by Git. The example uses the existing Nextcloud `nginx-proxy` and exposes the bridge at `https://<VIRTUAL_HOST>/cruxwledbridge/`. It does not publish another host port. `PROXY_NETWORK` must be the Docker network used by the Nextcloud proxy; it defaults to `nextcloud_proxy-tier`. You can find the actual name with `docker network ls` and override it, for example with `PROXY_NETWORK=myproject_proxy-tier docker compose up -d --build`.
 

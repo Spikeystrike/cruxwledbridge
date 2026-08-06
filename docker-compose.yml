@@ -13,6 +13,7 @@ services:
       VIRTUAL_DEST: /
       APP_PATH_PREFIX: /cruxwledbridge
     volumes:
+      - /etc/localtime:/etc/localtime:ro
       - /share/Docker-Appdata/cruxwledbridge/db:/code/db
       - /share/Docker-Appdata/cruxwledbridge/config:/code/config
     networks:
