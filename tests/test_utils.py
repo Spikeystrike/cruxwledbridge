@@ -1223,24 +1223,51 @@ class WledTests(unittest.TestCase):
 
         utils.playCelebrationEffect("rainbow")
 
-        post.assert_called_once_with(
-            "http://192.0.2.10/json/state",
-            json={
-                "on": True,
-                "bri": 255,
-                "tt": 0,
-                "seg": {
-                    "id": 0,
-                    "start": 0,
-                    "stop": 3,
-                    "on": True,
-                    "fx": 9,
-                    "sx": 180,
-                    "ix": 180,
-                },
-            },
-            timeout=2,
+        self.assertEqual(
+            post.call_args_list,
+            [
+                call(
+                    "http://192.0.2.10/json/state",
+                    json={"on": True, "bri": 255, "tt": 0},
+                    timeout=2,
+                ),
+                call(
+                    "http://192.0.2.10/json/state",
+                    json={
+                        "seg": {
+                            "id": 0,
+                            "start": 0,
+                            "stop": 3,
+                            "on": True,
+                            "bri": 255,
+                            "frz": False,
+                            "fx": 9,
+                            "sx": 180,
+                            "ix": 180,
+                        },
+                    },
+                    timeout=2,
+                ),
+            ],
         )
+
+    @patch("utils.requests.post")
+    def test_celebration_wakes_each_controller_before_starting_effect(self, post):
+        post.return_value = Mock()
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 102},
+            {"ip": "192.0.2.11", "start": 200, "end": 203},
+        ]
+
+        utils.playCelebrationEffect("fireworks")
+
+        self.assertEqual(len(post.call_args_list), 4)
+        for wake_call, effect_call in zip(
+            post.call_args_list[::2], post.call_args_list[1::2]
+        ):
+            self.assertEqual(wake_call.kwargs["json"], {"on": True, "bri": 255, "tt": 0})
+            self.assertFalse(effect_call.kwargs["json"]["seg"]["frz"])
+            self.assertEqual(effect_call.kwargs["json"]["seg"]["fx"], 42)
 
     @patch("utils.requests.post")
     def test_unknown_celebration_effect_is_rejected(self, post):
