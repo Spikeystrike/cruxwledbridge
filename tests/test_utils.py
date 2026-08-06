@@ -168,6 +168,7 @@ class CelebrationTests(unittest.TestCase):
         self.original_effect = main.celebration_effect
         self.original_duration = main.celebration_duration_seconds
         self.original_holds = main.current_wall_holds
+        self.original_pending_holds = main._pending_viewed_holds
         self.original_mode = main.wall_lighting_mode
         self.original_generation = main._celebration_generation
         self.original_active = main._celebration_active
@@ -176,6 +177,7 @@ class CelebrationTests(unittest.TestCase):
         main.celebration_effect = self.original_effect
         main.celebration_duration_seconds = self.original_duration
         main.current_wall_holds = self.original_holds
+        main._pending_viewed_holds = self.original_pending_holds
         main.wall_lighting_mode = self.original_mode
         main._celebration_generation = self.original_generation
         main._celebration_active = self.original_active
@@ -242,6 +244,7 @@ class CelebrationTests(unittest.TestCase):
     def test_celebration_restores_latest_wall_state(self, play_effect, send_lights):
         main.celebration_duration_seconds = 0
         main.current_wall_holds = {2: "start"}
+        main._pending_viewed_holds = {1: "finish"}
         main.wall_lighting_mode = "bright"
         main._celebration_generation = 8
         main._celebration_active = True
@@ -249,8 +252,76 @@ class CelebrationTests(unittest.TestCase):
         asyncio.run(main._run_celebration("rainbow", 8))
 
         play_effect.assert_called_once_with("rainbow")
-        send_lights.assert_called_once_with({2: "start"}, "bright")
+        send_lights.assert_called_once_with({1: "finish"}, "bright")
+        self.assertEqual(main.current_wall_holds, {1: "finish"})
+        self.assertIsNone(main._pending_viewed_holds)
         self.assertFalse(main._celebration_active)
+
+    @patch("main.sendLightToBoulderwall")
+    def test_viewed_during_celebration_is_deferred_until_it_finishes(self, send_lights):
+        main.current_wall_holds = {2: "start"}
+        main._pending_viewed_holds = None
+        main._celebration_active = True
+
+        hit = Mock()
+        hit.ledid = 1
+        db = Mock()
+        db.query.return_value.filter.return_value.first.return_value = hit
+        request = AccessLoggingTests.make_request(path="/viewed")
+        payload = main.PayL(
+            payload={
+                "id": 322,
+                "wall_id": 44,
+                "angle": None,
+                "color": None,
+                "created_at": None,
+                "description": None,
+                "foot_rules": None,
+                "grade": "6B",
+                "gym_name": None,
+                "gym_slug": None,
+                "holds": [{"id": "hold-1", "hold_type": "start", "mask": []}],
+                "image_height": None,
+                "image_url": "https://example.com/climb.jpg",
+                "image_width": 100,
+                "name": "Next Boulder",
+                "number_of_comments": 0,
+                "number_of_sends": 0,
+                "sends": None,
+                "setter_id": 1,
+                "setter_name": "Setter",
+                "unedited_image_url": "https://example.com/climb-original.jpg",
+                "unset_at": None,
+                "updated_at": "2026-08-06T00:00:00Z",
+            }
+        )
+
+        with patch("main.SessionLocal", return_value=db):
+            asyncio.run(main.viewed(payload, request))
+
+        send_lights.assert_not_called()
+        self.assertEqual(main.current_wall_holds, {2: "start"})
+        self.assertEqual(main._pending_viewed_holds, {1: "start"})
+        db.close.assert_called_once_with()
+
+    @patch("main._restore_current_wall")
+    @patch("main.playCelebrationEffect")
+    def test_older_celebration_cannot_deactivate_newer_one(self, play_effect, restore):
+        main.celebration_duration_seconds = 0
+        main._celebration_generation = 8
+        main._celebration_active = True
+
+        async def schedule_newer_celebration_during_restore():
+            main._celebration_generation = 9
+            main._celebration_active = True
+
+        restore.side_effect = schedule_newer_celebration_during_restore
+
+        asyncio.run(main._run_celebration("rainbow", 8))
+
+        restore.assert_awaited_once_with()
+        self.assertTrue(main._celebration_active)
+        self.assertEqual(main._celebration_generation, 9)
 
     @patch("main.persist_celebration_effect")
     def test_celebration_selection_can_be_changed_or_disabled(self, persist):

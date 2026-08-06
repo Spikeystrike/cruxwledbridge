@@ -101,6 +101,7 @@ app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
 wall_lighting_mode = "dark"  # "dark" or "bright"
 current_wall_holds = {}
+_pending_viewed_holds = None
 celebration_duration_seconds = float(
     getattr(config, "celebration_duration_seconds", 3.0)
 )
@@ -146,6 +147,10 @@ celebration_effect = load_celebration_effect()
 
 
 async def _restore_current_wall():
+    global current_wall_holds, _pending_viewed_holds
+    if _pending_viewed_holds is not None:
+        current_wall_holds = _pending_viewed_holds
+        _pending_viewed_holds = None
     await asyncio.to_thread(
         sendLightToBoulderwall,
         dict(current_wall_holds),
@@ -171,7 +176,11 @@ async def _run_celebration(effect, generation):
                 try:
                     await _restore_current_wall()
                 finally:
-                    _celebration_active = False
+                    # A new celebration can be scheduled while the restore is
+                    # waiting on WLED I/O. Do not let this older task mark the
+                    # newer celebration inactive.
+                    if generation == _celebration_generation:
+                        _celebration_active = False
 
 
 def schedule_celebration():
@@ -392,7 +401,7 @@ async def root():
 
 @app.post("/viewed")
 async def viewed(payload: PayL, request: Request):
-    global current_wall_holds
+    global current_wall_holds, _pending_viewed_holds
     # Verarbeite den JSON-Payload
     climb = payload.payload
     request.state.viewed_climb = {
@@ -409,8 +418,14 @@ async def viewed(payload: PayL, request: Request):
             if hit:
                 holds[hit.ledid] = hold.hold_type
         async with _lighting_state_lock:
-            current_wall_holds = dict(holds)
-            if not _celebration_active:
+            if _celebration_active:
+                # Keep the running celebration untouched. If several viewed
+                # events arrive, the most recent one is what should be shown
+                # once the celebration has finished.
+                _pending_viewed_holds = dict(holds)
+            else:
+                current_wall_holds = dict(holds)
+                _pending_viewed_holds = None
                 await asyncio.to_thread(
                     sendLightToBoulderwall,
                     holds,
