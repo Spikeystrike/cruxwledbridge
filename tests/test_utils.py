@@ -1324,12 +1324,15 @@ class WledTests(unittest.TestCase):
             [
                 call(
                     "http://192.0.2.10/json/state",
-                    json={"on": True, "bri": 255, "tt": 0},
+                    json={"on": False, "tt": 0},
                     timeout=2,
                 ),
                 call(
                     "http://192.0.2.10/json/state",
                     json={
+                        "on": True,
+                        "bri": 255,
+                        "tt": 0,
                         "seg": {
                             "id": 0,
                             "start": 0,
@@ -1348,7 +1351,7 @@ class WledTests(unittest.TestCase):
         )
 
     @patch("utils.requests.post")
-    def test_celebration_wakes_each_controller_before_starting_effect(self, post):
+    def test_celebration_resets_each_controller_before_starting_effect(self, post):
         post.return_value = Mock()
         config.wled_controllers = [
             {"ip": "192.0.2.10", "start": 100, "end": 102},
@@ -1358,10 +1361,13 @@ class WledTests(unittest.TestCase):
         utils.playCelebrationEffect("fireworks")
 
         self.assertEqual(len(post.call_args_list), 4)
-        for wake_call, effect_call in zip(
+        for reset_call, effect_call in zip(
             post.call_args_list[::2], post.call_args_list[1::2]
         ):
-            self.assertEqual(wake_call.kwargs["json"], {"on": True, "bri": 255, "tt": 0})
+            self.assertEqual(reset_call.kwargs["json"], {"on": False, "tt": 0})
+            self.assertTrue(effect_call.kwargs["json"]["on"])
+            self.assertEqual(effect_call.kwargs["json"]["bri"], 255)
+            self.assertEqual(effect_call.kwargs["json"]["tt"], 0)
             self.assertFalse(effect_call.kwargs["json"]["seg"]["frz"])
             self.assertEqual(effect_call.kwargs["json"]["seg"]["fx"], 42)
 

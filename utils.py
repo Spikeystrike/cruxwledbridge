@@ -197,17 +197,20 @@ def playCelebrationEffect(effect):
     for controller in _wled_controllers():
         led_count = controller["end"] - controller["start"] + 1
         # Boulder rendering uses WLED's individual LED control, which freezes
-        # the segment. Wake the controller first, then explicitly unfreeze the
-        # segment before selecting an effect. Keeping these as two requests also
-        # makes effect startup reliable when the controller was previously off.
+        # the segment. Turning WLED off explicitly leaves individual LED mode;
+        # start the effect only in the following request so the animation is
+        # reliably active regardless of the previously rendered boulder state.
         requests.post(
             controller["url"],
-            json={"on": True, "bri": 255, "tt": 0},
+            json={"on": False, "tt": 0},
             timeout=2,
         )
         requests.post(
             controller["url"],
             json={
+                "on": True,
+                "bri": 255,
+                "tt": 0,
                 "seg": {
                     "id": 0,
                     "start": 0,
