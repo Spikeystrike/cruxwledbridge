@@ -30,7 +30,7 @@ services:
       # Persist the SQLite database on the Docker host.
       - /share/Docker-Appdata/cruxwledbridge/db:/code/db
       # Mount the host config directory where the app loads config/config.py.
-      # Docker does not copy config.example.py into this directory automatically.
+      # An empty mount is initialized from the config bundled into the image.
       - /share/Docker-Appdata/cruxwledbridge/config:/code/app/config
     networks:
       # Join the already existing network used by nginx-proxy.

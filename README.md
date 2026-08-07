@@ -12,14 +12,9 @@ Three commented Docker Compose examples are included:
 
 Start the example you want with `docker compose -f <filename> up -d --build`, for example `docker compose -f docker-compose.no-proxy.yml up -d --build`.
 
-All examples persist the SQLite database at `/code/db/app.db` and mount the host `config` directory at `/code/app/config`. Docker does **not** copy files from the image into an empty bind-mounted host directory. Before starting the container, you must therefore copy the included example to the mounted host directory as `config.py` and adjust it:
+All examples persist the SQLite database at `/code/db/app.db` and mount the host `config` directory at `/code/app/config`. On startup, an empty config mount is initialized automatically: the bridge first copies `config.py` bundled into the image; if that file was not present while the image was built, it copies `config.example.py` as `config.py` instead. An existing `config.py` in the mount is never overwritten.
 
-```bash
-mkdir -p /share/Docker-Appdata/cruxwledbridge/config
-cp config/config.example.py /share/Docker-Appdata/cruxwledbridge/config/config.py
-```
-
-With the example Compose paths, the bridge then reads `/share/Docker-Appdata/cruxwledbridge/config/config.py` on the host as `/code/app/config/config.py` in the container. If `config/config.py` is missing, the bridge prints an error and exits instead of starting with an invalid configuration. Make sure the host directories are readable or writable as required by container user `1018:100`. The read-only `/etc/localtime` mount makes log timestamps use the Docker host's local timezone instead of hard-coding a timezone in the application.
+With the example Compose paths, the bridge reads `/share/Docker-Appdata/cruxwledbridge/config/config.py` on the host as `/code/app/config/config.py` in the container. After the first start, adjust the generated file if it came from `config.example.py`, then restart the bridge. If neither `config.py` nor `config.example.py` was available in the built image, or the mounted directory is not writable, the bridge prints an error and exits. Make sure the host directories are readable or writable as required by container user `1018:100`. The read-only `/etc/localtime` mount makes log timestamps use the Docker host's local timezone instead of hard-coding a timezone in the application.
 
 For `docker-compose.proxy.yml`, `VIRTUAL_HOST` defaults to `localhost`; override it if you access the proxy with another hostname. This example mounts the Docker socket read-only so `nginx-proxy` can discover the bridge container. Docker-socket access is security-sensitive even when mounted read-only, so only use a trusted proxy image.
 

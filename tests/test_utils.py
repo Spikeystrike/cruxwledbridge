@@ -3,8 +3,10 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from fastapi import HTTPException
@@ -30,22 +32,69 @@ import main
 
 
 class ConfigLoaderTests(unittest.TestCase):
+    def test_initialize_config_prefers_bundled_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mounted = root / "mounted"
+            bundled = root / "bundled"
+            mounted.mkdir()
+            bundled.mkdir()
+            (bundled / "config.py").write_text("source = 'config'\n")
+            (bundled / "config.example.py").write_text("source = 'example'\n")
+
+            target = config_loader.initialize_config(mounted, bundled)
+
+            self.assertEqual(target, mounted / "config.py")
+            self.assertEqual(target.read_text(), "source = 'config'\n")
+
+    def test_initialize_config_falls_back_to_example(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mounted = root / "mounted"
+            bundled = root / "bundled"
+            mounted.mkdir()
+            bundled.mkdir()
+            (bundled / "config.example.py").write_text("source = 'example'\n")
+
+            target = config_loader.initialize_config(mounted, bundled)
+
+            self.assertEqual(target, mounted / "config.py")
+            self.assertEqual(target.read_text(), "source = 'example'\n")
+
+    def test_initialize_config_does_not_overwrite_existing_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            mounted = root / "mounted"
+            bundled = root / "bundled"
+            mounted.mkdir()
+            bundled.mkdir()
+            (mounted / "config.py").write_text("source = 'mounted'\n")
+            (bundled / "config.py").write_text("source = 'bundled'\n")
+
+            config_loader.initialize_config(mounted, bundled)
+
+            self.assertEqual(
+                (mounted / "config.py").read_text(),
+                "source = 'mounted'\n",
+            )
+
     def test_missing_config_prints_error_and_exits(self):
         missing = ModuleNotFoundError("No module named 'config.config'")
         missing.name = "config.config"
 
         with patch.object(config_loader.sys, "stderr") as stderr:
-            with patch.object(
-                config_loader.importlib,
-                "import_module",
-                side_effect=missing,
-            ):
-                with self.assertRaisesRegex(SystemExit, "1"):
-                    config_loader.load_config()
+            with patch.object(config_loader, "initialize_config", return_value=None):
+                with patch.object(
+                    config_loader.importlib,
+                    "import_module",
+                    side_effect=missing,
+                ):
+                    with self.assertRaisesRegex(SystemExit, "1"):
+                        config_loader.load_config()
 
         message = "".join(call.args[0] for call in stderr.write.call_args_list)
         self.assertIn("ERROR: config/config.py is missing", message)
-        self.assertIn("config/config.example.py", message)
+        self.assertIn("No config.py or config.example.py", message)
 
     def test_config_dependency_import_errors_are_not_hidden(self):
         dependency_error = ModuleNotFoundError("No module named 'custom_dependency'")
