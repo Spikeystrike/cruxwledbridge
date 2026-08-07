@@ -1,0 +1,43 @@
+# Example: run Crux WLED Bridge behind an nginx-proxy that already exists
+# outside this Compose project (for example the proxy from a Nextcloud stack).
+services:
+  bwall:
+    # Build the bridge image from the Dockerfile in this repository.
+    build: .
+    # Use a stable name so the container is easy to identify in Docker logs.
+    container_name: cruxwledbridge
+    # Keep the bridge running across Docker/host restarts unless stopped manually.
+    restart: unless-stopped
+    # Run with the UID/GID that owns the mounted config and database directories.
+    user: "1018:100"
+    # Make port 80 available to Docker networks only; the external proxy publishes it.
+    expose:
+      - "80"
+    environment:
+      # nginx-proxy routes this public hostname to the bridge.
+      VIRTUAL_HOST: ${VIRTUAL_HOST:?Set VIRTUAL_HOST in .env}
+      # The bridge listens on port 80 inside the container.
+      VIRTUAL_PORT: "80"
+      # Publish the application below /cruxwledbridge/ on the proxy.
+      VIRTUAL_PATH: /cruxwledbridge/
+      # Strip the public path prefix before forwarding requests to FastAPI.
+      VIRTUAL_DEST: /
+      # Tell FastAPI/templates which public path prefix the proxy exposes.
+      APP_PATH_PREFIX: /cruxwledbridge
+    volumes:
+      # Use the Docker host's local timezone for log timestamps.
+      - /etc/localtime:/etc/localtime:ro
+      # Persist the SQLite database on the Docker host.
+      - /share/Docker-Appdata/cruxwledbridge/db:/code/db
+      # Provide config.py from the Docker host.
+      - /share/Docker-Appdata/cruxwledbridge/config:/code/config
+    networks:
+      # Join the already existing network used by nginx-proxy.
+      - proxy-tier
+
+networks:
+  proxy-tier:
+    # Do not create this network; the external proxy stack owns it.
+    external: true
+    # Override PROXY_NETWORK if the proxy network has a different Docker name.
+    name: ${PROXY_NETWORK:-nextcloud_proxy-tier}

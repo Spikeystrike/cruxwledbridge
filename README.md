@@ -1,44 +1,24 @@
 # CRUX App to WLED Bridge
 This small python script is a quick and dirty Crux App to WLED Bridge. The workflow is following:
 
-## Setup Container 
-To get the bridge running, i recommend to use a proxy for authenticating all urls but https://<bridge>/viewed. 
-you can build the container by building the docker file. i would recommend to mount the configuration and database directories:
-here a example docker-compose setup (without authenticaiton):
-```yaml
-services:
-  bwall:
-    build: ./code
-    container_name: cruxwledbridge
-    restart: unless-stopped
-    user: 1018:100
-    expose:
-      - "80"
-    environment:
-      VIRTUAL_HOST: ${VIRTUAL_HOST:?Set VIRTUAL_HOST in .env}
-      VIRTUAL_PORT: "80"
-      VIRTUAL_PATH: /cruxwledbridge/
-      VIRTUAL_DEST: /
-      APP_PATH_PREFIX: /cruxwledbridge
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /share/Docker-Appdata/cruxwledbridge/db:/code/db
-      - /share/Docker-Appdata/cruxwledbridge/config:/code/config
-    networks:
-      - proxy-tier
+## Setup Container
+To get the bridge running, I recommend using a proxy for authenticating all URLs except `https://<bridge>/viewed`.
 
-networks:
-  proxy-tier:
-    external: true
-    name: ${PROXY_NETWORK:-nextcloud_proxy-tier}
-```
-The SQLite database is stored at `/code/db/app.db`. The configuration file must be available as `/code/config/config.py` (for the example above: `/share/Docker-Appdata/cruxwledbridge/config/config.py`). Copy `config/config.example.py` to that location and adjust it before starting the container. Make sure the mounted host directories are readable or writable as required by the configured container user (`1018:100`). The read-only `/etc/localtime` mount makes log timestamps use the Docker host's local timezone instead of the container default, so no timezone is hard-coded in the application.
+Three commented Docker Compose examples are included:
 
-Set the public hostname in a local `.env` file before starting the stack, for example `VIRTUAL_HOST=bridge.example.com`. The file is ignored by Git. The example uses the existing Nextcloud `nginx-proxy` and exposes the bridge at `https://<VIRTUAL_HOST>/cruxwledbridge/`. It does not publish another host port. `PROXY_NETWORK` must be the Docker network used by the Nextcloud proxy; it defaults to `nextcloud_proxy-tier`. You can find the actual name with `docker network ls` and override it, for example with `PROXY_NETWORK=myproject_proxy-tier docker compose up -d --build`.
+- `docker-compose.no-proxy.yml`: publishes the bridge directly at `http://<host>:8080/`.
+- `docker-compose.proxy.yml`: runs `nginxproxy/nginx-proxy` in the same Compose project and publishes the bridge at `http://<host>:8080/cruxwledbridge/`.
+- `docker-compose.external-proxy.yml`: the previous setup, renamed to make it explicit that it joins an already existing `nginx-proxy` network and publishes `https://<VIRTUAL_HOST>/cruxwledbridge/`.
 
-The proxy image must support nginx-proxy's `VIRTUAL_PATH` and `VIRTUAL_DEST` settings. The existing Nextcloud service already manages the certificate for this hostname, so the bridge does not request a second certificate.
+Start the example you want with `docker compose -f <filename> up -d --build`, for example `docker compose -f docker-compose.no-proxy.yml up -d --build`.
 
-After that you can start the container and access it under `https://<VIRTUAL_HOST>/cruxwledbridge/`.
+All examples persist the SQLite database at `/code/db/app.db` and expect the configuration file at `/code/config/config.py`. With the example host paths, copy `config/config.example.py` to `/share/Docker-Appdata/cruxwledbridge/config/config.py` and adjust it before starting the container. Make sure those host directories are readable or writable as required by container user `1018:100`. The read-only `/etc/localtime` mount makes log timestamps use the Docker host's local timezone instead of hard-coding a timezone in the application.
+
+For `docker-compose.proxy.yml`, `VIRTUAL_HOST` defaults to `localhost`; override it if you access the proxy with another hostname. This example mounts the Docker socket read-only so `nginx-proxy` can discover the bridge container. Docker-socket access is security-sensitive even when mounted read-only, so only use a trusted proxy image.
+
+For `docker-compose.external-proxy.yml`, set the public hostname in a local `.env` file, for example `VIRTUAL_HOST=bridge.example.com`. The file is ignored by Git. `PROXY_NETWORK` must be the Docker network used by the external proxy and defaults to `nextcloud_proxy-tier`. Find the actual name with `docker network ls` and override it when needed, for example with `PROXY_NETWORK=myproject_proxy-tier docker compose -f docker-compose.external-proxy.yml up -d --build`.
+
+Both proxy examples require nginx-proxy support for `VIRTUAL_PATH` and `VIRTUAL_DEST`. In the external-proxy example, the existing proxy is also responsible for TLS/certificates.
 
 ## Setup Bridge
 1) Create a Gym in the CRUX App and create a wall. 

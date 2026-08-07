@@ -1,0 +1,55 @@
+# Example: run Crux WLED Bridge and nginx-proxy in the same Compose project.
+services:
+  proxy:
+    # nginx-proxy discovers containers through their VIRTUAL_* environment values.
+    image: nginxproxy/nginx-proxy:1.11-alpine
+    # Keep the proxy running across Docker/host restarts unless stopped manually.
+    restart: unless-stopped
+    ports:
+      # Publish the proxy on host port 8080; the bridge itself stays internal.
+      - "8080:80"
+    volumes:
+      # nginx-proxy needs Docker metadata for service discovery. Even read-only
+      # Docker-socket access is security-sensitive, so only use trusted images.
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    networks:
+      # Share a private Compose network with the bridge.
+      - proxy-tier
+
+  bwall:
+    # Build the bridge image from the Dockerfile in this repository.
+    build: .
+    # Use a stable name so the container is easy to identify in Docker logs.
+    container_name: cruxwledbridge
+    # Keep the bridge running across Docker/host restarts unless stopped manually.
+    restart: unless-stopped
+    # Run with the UID/GID that owns the mounted config and database directories.
+    user: "1018:100"
+    expose:
+      # Expose port 80 only to the proxy network; do not publish it on the host.
+      - "80"
+    environment:
+      # Use localhost by default; override VIRTUAL_HOST for another hostname.
+      VIRTUAL_HOST: ${VIRTUAL_HOST:-localhost}
+      # The bridge listens on port 80 inside the container.
+      VIRTUAL_PORT: "80"
+      # Publish the application below /cruxwledbridge/ on the proxy.
+      VIRTUAL_PATH: /cruxwledbridge/
+      # Strip the public path prefix before forwarding requests to FastAPI.
+      VIRTUAL_DEST: /
+      # Tell FastAPI/templates which public path prefix the proxy exposes.
+      APP_PATH_PREFIX: /cruxwledbridge
+    volumes:
+      # Use the Docker host's local timezone for log timestamps.
+      - /etc/localtime:/etc/localtime:ro
+      # Persist the SQLite database on the Docker host.
+      - /share/Docker-Appdata/cruxwledbridge/db:/code/db
+      # Provide config.py from the Docker host.
+      - /share/Docker-Appdata/cruxwledbridge/config:/code/config
+    networks:
+      # Connect the bridge only to the private proxy network.
+      - proxy-tier
+
+networks:
+  proxy-tier:
+    # Compose creates this private network for the proxy and bridge automatically.
