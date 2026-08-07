@@ -1,32 +1,35 @@
 # CRUX App to WLED Bridge
 This small python script is a quick and dirty Crux App to WLED Bridge. The workflow is following:
 
-## Setup Container 
-To get the bridge running, i recommend to use a proxy for authenticating all urls but https://<bridge>/viewed. 
-you can build the container by building the docker file. i would recommend to mount the config.py and app.db:
-here a example docker-compose setup (without authenticaiton):
-```
-services:
-  bwall:
-    build: ./cruxledbridge
-    restart: unless-stopped
-    ports:
-      - 8080:80
-    volumes:
-      - ./app.db:/code/app.db
-      - ./config.py:/code/app/config.py
-```
-after that you can startup your container and access it under https://<bridge> 
+## Setup Container
+To get the bridge running, I recommend using a proxy for authenticating all URLs except `https://<bridge>/viewed`.
+
+Three commented Docker Compose examples are included:
+
+- `docker-compose.no-proxy.yml`: publishes the bridge directly at `http://<host>:8080/`.
+- `docker-compose.proxy.yml`: runs `nginxproxy/nginx-proxy` in the same Compose project and publishes the bridge at `http://<host>:8080/cruxwledbridge/`.
+- `docker-compose.external-proxy.yml`: the previous setup, renamed to make it explicit that it joins an already existing `nginx-proxy` network and publishes `https://<VIRTUAL_HOST>/cruxwledbridge/`.
+
+Start the example you want with `docker compose -f <filename> up -d --build`, for example `docker compose -f docker-compose.no-proxy.yml up -d --build`.
+
+All examples persist the SQLite database at `/code/db/app.db` and expect the configuration file at `/code/config/config.py`. With the example host paths, copy `config/config.example.py` to `/share/Docker-Appdata/cruxwledbridge/config/config.py` and adjust it before starting the container. Make sure those host directories are readable or writable as required by container user `1018:100`. The read-only `/etc/localtime` mount makes log timestamps use the Docker host's local timezone instead of hard-coding a timezone in the application.
+
+For `docker-compose.proxy.yml`, `VIRTUAL_HOST` defaults to `localhost`; override it if you access the proxy with another hostname. This example mounts the Docker socket read-only so `nginx-proxy` can discover the bridge container. Docker-socket access is security-sensitive even when mounted read-only, so only use a trusted proxy image.
+
+For `docker-compose.external-proxy.yml`, set the public hostname in a local `.env` file, for example `VIRTUAL_HOST=bridge.example.com`. The file is ignored by Git. `PROXY_NETWORK` must be the Docker network used by the external proxy and defaults to `nextcloud_proxy-tier`. Find the actual name with `docker network ls` and override it when needed, for example with `PROXY_NETWORK=myproject_proxy-tier docker compose -f docker-compose.external-proxy.yml up -d --build`.
+
+Both proxy examples require nginx-proxy support for `VIRTUAL_PATH` and `VIRTUAL_DEST`. In the external-proxy example, the existing proxy is also responsible for TLS/certificates.
 
 ## Setup Bridge
 1) Create a Gym in the CRUX App and create a wall. 
-2) Get your API key from the CRUX App and insert it into config.py (there is a config.example.py as an example)
-3) Map your LEDs to the hold ids. Your hold IDs are all possible places to place a hold (if you have for example a 13x13 grid, you have 169 holdIDs) - you may have to edit the code for LEDs because it is very individual for my setup. all individual stuff is in utils.py
-2) open <bridge>/listwalls?gym=<gymslug> and select the wall you want to map 
-3) input your grid size, then tap on the top hole, top left, bottom left, bottom right hole an press send
-4) configure a webhook for the user.viewed action --> https://<bridge>/viewed 
-5) When you press on a climb, it should light up the right holes on the wall
-6) enjoy climbing!
+2) Get your API key from the CRUX App and insert it into `config/config.py` (there is a `config/config.example.py` as an example)
+3) Configure `wled_controllers` and `hole2LEDS` in `config/config.py`. Each controller has an inclusive range of global physical LED IDs. Wall Creation assigns logical hole IDs according to the selected cable direction. `hole2LEDS` maps each logical hole to its actual physical LED IDs. This allows gaps for unused LEDs and multiple LEDs at one hold. For example, `{0: [0], 1: [2, 3]}` leaves physical LED 1 unused and assigns physical LEDs 2 and 3 to logical hole 1.
+2) open `https://<bridge>/cruxwledbridge/listwalls?gym=<gymslug>` and select the wall you want to map
+3) Input your grid size, then select whether the grid is standard or alternating. In alternating mode, `Columns` is the total number of possible horizontal positions and may be even or odd. Choose whether the top row is indented or not indented. For example, with `Columns=22`, each row contains 11 LEDs; with an odd number of columns, alternating rows differ by one LED. Select the location of logical hole 0 (top left, top right, bottom left, or bottom right) and whether the cable snakes horizontally through rows or vertically through columns. The default is hole 0 at the bottom left with a vertical cable run. Tap the grid corners in the order top left, top right, bottom right, bottom left and press send. You can then click individual grid positions to disable or re-enable them and save the adjusted mapping. Reopening the same `/wallcreation?id=...` URL restores the last saved corners, grid settings, cable layout, and disabled positions so the mapping can be edited without defining it again. Wall creations saved before this feature need to be defined once more so those settings can be stored. Active logical hole IDs stay contiguous in the selected cable order; `hole2LEDS` performs the separate mapping from those hole IDs to the actual physical LEDs.
+4) Configure a user webhook for `climb.viewed` --> `https://<bridge>/cruxwledbridge/viewed`. If you are a gym admin, also configure a gym webhook for `climb.sent` --> `https://<bridge>/cruxwledbridge/sent` to trigger a short celebration across all LEDs whenever a climb is sent.
+5) When you press on a climb, it should light up the right holes on the wall. Hold mappings are stored as `<wall_id>_<hold_id>`, so the webhook payload must include `payload.wall_id`.
+6) The wall lighting can be switched at `https://<bridge>/cruxwledbridge/wall_lighting`: dark lights only the current boulder, while bright additionally lights unused LEDs dim white. The same page lets you choose the `climb.sent` celebration: moving rainbow (default), fireworks, color sparkles, rainbow party, or off. The selection is stored in the SQLite database and survives restarts. A celebration runs for 3 seconds by default, then the latest viewed boulder is restored; set `celebration_duration_seconds` in `config.py` to change the duration. The lighting mode is also available through `POST /cruxwledbridge/wall_lighting_mode` with `{"mode":"dark"}` or `{"mode":"bright"}`.
+7) enjoy climbing!
 
 ## Hardware used
 I use following hardware on the wall:
@@ -38,8 +41,15 @@ I use following hardware on the wall:
 
 if you have any more questions you can reach me in the CRUX App Discord.
 
-## Todos
-The WLED API Setup is VERY individual right now, i will refactor it when i have time.
+## Multiple WLED controllers
+
+Add one entry per controller. Ranges must not overlap:
+
+```python
+wled_controllers = [
+    {"ip": "192.0.2.10", "start": 0, "end": 399},
+]
+```
 
 ## Setup-Picture
 Thats how it looks like after beeing finished:

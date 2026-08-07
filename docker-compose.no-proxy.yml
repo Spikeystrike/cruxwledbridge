@@ -1,0 +1,21 @@
+# Example: run Crux WLED Bridge directly, without a reverse proxy.
+services:
+  bwall:
+    # Build the bridge image from the Dockerfile in this repository.
+    build: .
+    # Use a stable name so the container is easy to identify in Docker logs.
+    container_name: cruxwledbridge
+    # Keep the bridge running across Docker/host restarts unless stopped manually.
+    restart: unless-stopped
+    # Run with the UID/GID that owns the mounted config and database directories.
+    user: "1018:100"
+    ports:
+      # Publish the bridge directly on host port 8080.
+      - "8080:80"
+    volumes:
+      # Use the Docker host's local timezone for log timestamps.
+      - /etc/localtime:/etc/localtime:ro
+      # Persist the SQLite database on the Docker host.
+      - /share/Docker-Appdata/cruxwledbridge/db:/code/db
+      # Provide config.py from the Docker host.
+      - /share/Docker-Appdata/cruxwledbridge/config:/code/config
