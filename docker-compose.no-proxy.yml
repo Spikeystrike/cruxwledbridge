@@ -17,5 +17,6 @@ services:
       - /etc/localtime:/etc/localtime:ro
       # Persist the SQLite database on the Docker host.
       - /share/Docker-Appdata/cruxwledbridge/db:/code/db
-      # Provide config.py from the Docker host.
-      - /share/Docker-Appdata/cruxwledbridge/config:/code/config
+      # Mount the host config directory where the app loads config/config.py.
+      # Docker does not copy config.example.py into this directory automatically.
+      - /share/Docker-Appdata/cruxwledbridge/config:/code/app/config

@@ -1,6 +1,6 @@
 import requests
 import numpy as np
-from config import config
+from config_loader import config
 
 
 CELEBRATION_EFFECTS = {

@@ -23,9 +23,43 @@ sys.modules["config"] = config_package
 sys.modules["config.config"] = config
 
 import utils
+import config_loader
 
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 import main
+
+
+class ConfigLoaderTests(unittest.TestCase):
+    def test_missing_config_prints_error_and_exits(self):
+        missing = ModuleNotFoundError("No module named 'config.config'")
+        missing.name = "config.config"
+
+        with patch.object(config_loader.sys, "stderr") as stderr:
+            with patch.object(
+                config_loader.importlib,
+                "import_module",
+                side_effect=missing,
+            ):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    config_loader.load_config()
+
+        message = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("ERROR: config/config.py is missing", message)
+        self.assertIn("config/config.example.py", message)
+
+    def test_config_dependency_import_errors_are_not_hidden(self):
+        dependency_error = ModuleNotFoundError("No module named 'custom_dependency'")
+        dependency_error.name = "custom_dependency"
+
+        with patch.object(
+            config_loader.importlib,
+            "import_module",
+            side_effect=dependency_error,
+        ):
+            with self.assertRaises(ModuleNotFoundError) as caught:
+                config_loader.load_config()
+
+        self.assertIs(caught.exception, dependency_error)
 
 
 class AccessLoggingTests(unittest.TestCase):

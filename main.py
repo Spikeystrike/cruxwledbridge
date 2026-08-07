@@ -28,7 +28,7 @@ import requests
 from templates.wall_lighting import return_wall_lighting_html
 from templates.wallselector import returnwallhtml
 from templates.language import language_switch_html
-from config import config
+from config_loader import config
 Base = declarative_base()
 # SQLAlchemy Model for Wall
 class Hold2ledDB(Base):
