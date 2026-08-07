@@ -7,7 +7,9 @@ TRANSLATIONS = {
     "en": {
         "page.title": "Climbing wall – select points",
         "page.heading": "Climbing wall – select points",
+        "form.rows": "Rows:",
         "form.rows_placeholder": "Number of rows",
+        "form.columns": "Columns:",
         "form.columns_placeholder": "Number of columns",
         "form.alternating": "Alternating grid",
         "form.top_row": "Top row:",
@@ -20,7 +22,7 @@ TRANSLATIONS = {
         "form.bottom_right": "Bottom right",
         "form.horizontal": "Horizontal (row by row)",
         "form.vertical": "Vertical (column by column)",
-        "help.alternating": "For an alternating grid, C is the number of all possible columns. C can be even or odd; the columns used alternate from row to row.",
+        "help.alternating": "For an alternating grid, Columns is the number of all possible horizontal positions. It can be even or odd; the positions used alternate from row to row.",
         "help.numbering": "LED numbering starts with LED 0 in the selected corner and follows the cable in a horizontal or vertical snake pattern.",
         "help.corners": "Click the 4 corner points in this order:",
         "help.corner_order": "Top left, top right, bottom right, bottom left",
@@ -29,6 +31,7 @@ TRANSLATIONS = {
         "image.alt": "Climbing wall",
         "button.send": "Send coordinates",
         "button.save": "Save selection",
+        "button.reset": "Reset",
         "status.points": "Points: {count} / 4",
         "status.grid": "Grid: {active} active, {excluded} disabled{suffix}",
         "status.unsaved": " – not saved yet",
@@ -36,8 +39,8 @@ TRANSLATIONS = {
         "grid.hold_title": "Hold ID: {holdId}\nLED ID: {ledId}",
         "grid.led_title": "LED ID: {ledId}. Click to disable.",
         "alert.four_points": "Please select exactly 4 points.",
-        "alert.valid_grid": "Please enter valid values for R and C.",
-        "alert.alternating_columns": "C must be at least 2 for an alternating grid.",
+        "alert.valid_grid": "Please enter valid values for Rows and Columns.",
+        "alert.alternating_columns": "Columns must be at least 2 for an alternating grid.",
         "alert.active_position": "At least one grid position must remain active.",
         "alert.saved": "Saved successfully.",
         "alert.send_error": "An error occurred while sending: {message}",
@@ -45,7 +48,9 @@ TRANSLATIONS = {
     "de": {
         "page.title": "Kletterwand – Punkte auswählen",
         "page.heading": "Kletterwand – Punkte auswählen",
+        "form.rows": "Reihen:",
         "form.rows_placeholder": "Anzahl der Reihen",
+        "form.columns": "Spalten:",
         "form.columns_placeholder": "Anzahl der Spalten",
         "form.alternating": "Alternierendes Raster",
         "form.top_row": "Oberste Reihe:",
@@ -58,7 +63,7 @@ TRANSLATIONS = {
         "form.bottom_right": "Unten rechts",
         "form.horizontal": "Horizontal (zeilenweise)",
         "form.vertical": "Vertikal (spaltenweise)",
-        "help.alternating": "Beim alternierenden Raster ist C die Anzahl aller möglichen Spalten. C darf gerade oder ungerade sein; die verwendeten Spalten wechseln von Reihe zu Reihe.",
+        "help.alternating": "Beim alternierenden Raster ist Spalten die Anzahl aller möglichen horizontalen Positionen. Die Zahl darf gerade oder ungerade sein; die verwendeten Positionen wechseln von Reihe zu Reihe.",
         "help.numbering": "Die LED-Nummerierung beginnt bei LED 0 in der gewählten Ecke und folgt dem Kabel schlangenförmig horizontal oder vertikal.",
         "help.corners": "Bitte klicke die 4 Eckpunkte in dieser Reihenfolge an:",
         "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
@@ -67,6 +72,7 @@ TRANSLATIONS = {
         "image.alt": "Kletterwand",
         "button.send": "Koordinaten senden",
         "button.save": "Auswahl speichern",
+        "button.reset": "Zurücksetzen",
         "status.points": "Punkte: {count} / 4",
         "status.grid": "Raster: {active} aktiv, {excluded} abgewählt{suffix}",
         "status.unsaved": " – noch nicht gespeichert",
@@ -74,8 +80,8 @@ TRANSLATIONS = {
         "grid.hold_title": "Griff-ID: {holdId}\nLED-ID: {ledId}",
         "grid.led_title": "LED-ID: {ledId}. Anklicken zum Abwählen.",
         "alert.four_points": "Bitte wähle genau 4 Punkte aus.",
-        "alert.valid_grid": "Bitte gib gültige Werte für R und C ein.",
-        "alert.alternating_columns": "Für ein alternierendes Raster muss C mindestens 2 sein.",
+        "alert.valid_grid": "Bitte gib gültige Werte für Reihen und Spalten ein.",
+        "alert.alternating_columns": "Für ein alternierendes Raster müssen mindestens 2 Spalten angegeben werden.",
         "alert.active_position": "Mindestens eine Rasterposition muss aktiv bleiben.",
         "alert.saved": "Erfolgreich gespeichert.",
         "alert.send_error": "Beim Senden ist ein Fehler aufgetreten: {message}",
@@ -110,6 +116,17 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 h1 {{
                     color: #333;
                 }}
+                .form-row {{
+                    display: flex;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                    margin-bottom: 10px;
+                }}
+                .form-row + .form-row {{
+                    padding-top: 10px;
+                    border-top: 1px solid #ccc;
+                }}
                 #image-container {{
                     position: relative;
                     cursor: crosshair;
@@ -136,20 +153,33 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     transform: translate(-50%, -50%);
                     pointer-events: none;
                 }}
-                #submit-btn {{
-                    display: none;
+                #action-buttons {{
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
                     margin-top: 20px;
+                }}
+                #submit-btn, #reset-btn {{
+                    display: none;
                     padding: 12px 25px;
                     font-size: 1.2em;
                     cursor: pointer;
-                    background-color: #4CAF50;
                     color: white;
                     border: none;
                     border-radius: 5px;
                     transition: background-color 0.3s;
                 }}
+                #submit-btn {{
+                    background-color: #4CAF50;
+                }}
                 #submit-btn:hover {{
                     background-color: #45a049;
+                }}
+                #reset-btn {{
+                    background-color: #777;
+                }}
+                #reset-btn:hover {{
+                    background-color: #666;
                 }}
                 #status {{
                     margin-top: 15px;
@@ -192,33 +222,41 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         <body>
             <h1 data-i18n="page.heading">Climbing wall – select points</h1>
              <div>
-                <label for="rows">R: </label>
-                <input type="number" id="rows" name="rows" placeholder="Number of rows" data-i18n-placeholder="form.rows_placeholder" min="1">
-                <label for="columns">C: </label>
-                <input type="number" id="columns" name="columns" placeholder="Number of columns" data-i18n-placeholder="form.columns_placeholder" min="1">
-                <label for="alternating">
-                    <input type="checkbox" id="alternating" name="alternating">
-                    <span data-i18n="form.alternating">Alternating grid</span>
-                </label>
-                <label for="alternating-start" data-i18n="form.top_row">Top row:</label>
-                <select id="alternating-start" name="alternating-start" disabled>
-                    <option value="0" data-i18n="form.not_offset">Not offset</option>
-                    <option value="1" data-i18n="form.offset">Offset</option>
-                </select>
-                <label for="led-start-corner">LED 0:</label>
-                <select id="led-start-corner" name="led-start-corner">
-                    <option value="top_left" data-i18n="form.top_left">Top left</option>
-                    <option value="top_right" data-i18n="form.top_right">Top right</option>
-                    <option value="bottom_left" data-i18n="form.bottom_left" selected>Bottom left</option>
-                    <option value="bottom_right" data-i18n="form.bottom_right">Bottom right</option>
-                </select>
-                <label for="led-direction" data-i18n="form.cable_path">Cable path:</label>
-                <select id="led-direction" name="led-direction">
-                    <option value="horizontal" data-i18n="form.horizontal">Horizontal (row by row)</option>
-                    <option value="vertical" data-i18n="form.vertical" selected>Vertical (column by column)</option>
-                </select>
+                <div class="form-row">
+                    <label for="rows" data-i18n="form.rows">Rows:</label>
+                    <input type="number" id="rows" name="rows" placeholder="Number of rows" data-i18n-placeholder="form.rows_placeholder" min="1">
+                    <label for="columns" data-i18n="form.columns">Columns:</label>
+                    <input type="number" id="columns" name="columns" placeholder="Number of columns" data-i18n-placeholder="form.columns_placeholder" min="1">
+                </div>
+                <div class="form-row">
+                    <label for="alternating">
+                        <input type="checkbox" id="alternating" name="alternating">
+                        <span data-i18n="form.alternating">Alternating grid</span>
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label for="alternating-start" data-i18n="form.top_row">Top row:</label>
+                    <select id="alternating-start" name="alternating-start" disabled>
+                        <option value="0" data-i18n="form.not_offset">Not offset</option>
+                        <option value="1" data-i18n="form.offset">Offset</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label for="led-start-corner">LED 0:</label>
+                    <select id="led-start-corner" name="led-start-corner">
+                        <option value="top_left" data-i18n="form.top_left">Top left</option>
+                        <option value="top_right" data-i18n="form.top_right">Top right</option>
+                        <option value="bottom_left" data-i18n="form.bottom_left" selected>Bottom left</option>
+                        <option value="bottom_right" data-i18n="form.bottom_right">Bottom right</option>
+                    </select>
+                    <label for="led-direction" data-i18n="form.cable_path">Cable path:</label>
+                    <select id="led-direction" name="led-direction">
+                        <option value="horizontal" data-i18n="form.horizontal">Horizontal (row by row)</option>
+                        <option value="vertical" data-i18n="form.vertical" selected>Vertical (column by column)</option>
+                    </select>
+                </div>
             </div>
-            <p data-i18n="help.alternating">For an alternating grid, C is the number of all possible columns. C can be even or odd; the columns used alternate from row to row.</p>
+            <p data-i18n="help.alternating">For an alternating grid, Columns is the number of all possible horizontal positions. It can be even or odd; the positions used alternate from row to row.</p>
             <p data-i18n="help.numbering">LED numbering starts with LED 0 in the selected corner and follows the cable in a horizontal or vertical snake pattern.</p>
             <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
             <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save selection</b>.</p>
@@ -228,7 +266,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             </div>
 
             <div id="status">Points: 0 / 4</div>
-            <button id="submit-btn" data-i18n="button.send">Send coordinates</button>
+            <div id="action-buttons">
+                <button id="reset-btn" type="button" data-i18n="button.reset">Reset</button>
+                <button id="submit-btn" data-i18n="button.send">Send coordinates</button>
+            </div>
 
             {language_switch}
 
@@ -237,6 +278,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 const imageContainer = document.getElementById('image-container');
                 const climbingImage = document.getElementById('climbing-image');
                 const submitBtn = document.getElementById('submit-btn');
+                const resetBtn = document.getElementById('reset-btn');
                 const statusDiv = document.getElementById('status');
                 const alternatingCheckbox = document.getElementById('alternating');
                 const alternatingStart = document.getElementById('alternating-start');
@@ -408,7 +450,21 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     }} else {{
                         submitBtn.style.display = 'none';
                     }}
+                    resetBtn.style.display = (points.length > 0 || renderedPositions) ? 'block' : 'none';
                 }}
+
+                resetBtn.addEventListener('click', () => {{
+                    points = [];
+                    renderedPositions = null;
+                    positionLedIds = {{}};
+                    renderedHolds2led = {{}};
+                    excludedPositionIds.clear();
+                    selectionDirty = false;
+                    lastGridSettings = null;
+                    updateSubmitButtonLabel();
+                    updateUI();
+                    renderGrid();
+                }});
 
                 function currentGridSettings() {{
                     return JSON.stringify({{

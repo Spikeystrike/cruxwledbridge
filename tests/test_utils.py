@@ -1026,6 +1026,11 @@ class PathPrefixTests(unittest.TestCase):
             "/cruxwledbridge",
         )
 
+        self.assertIn('<label for="rows" data-i18n="form.rows">Rows:</label>', html)
+        self.assertIn('<label for="columns" data-i18n="form.columns">Columns:</label>', html)
+        self.assertNotIn('<label for="rows">R:', html)
+        self.assertNotIn('<label for="columns">C:', html)
+        self.assertGreaterEqual(html.count('<div class="form-row">'), 4)
         self.assertIn('id="alternating"', html)
         self.assertIn("alternating: alternating", html)
         self.assertIn('id="alternating-start"', html)
@@ -1038,6 +1043,19 @@ class PathPrefixTests(unittest.TestCase):
             html,
         )
         self.assertIn("alternating_start_column: alternatingStartColumn", html)
+
+    def test_wall_selector_reset_clears_all_rendered_points(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+        )
+
+        self.assertIn('id="reset-btn"', html)
+        self.assertLess(html.index('id="reset-btn"'), html.index('id="submit-btn"'))
+        self.assertIn("resetBtn.addEventListener('click'", html)
+        self.assertIn("points = [];", html)
+        self.assertIn("renderedPositions = null;", html)
+        self.assertIn("excludedPositionIds.clear();", html)
 
     def test_wall_selector_offers_led_cable_layout(self):
         html = main.returnwallhtml(
