@@ -1,4 +1,6 @@
-# Copy this file to config.py and set your Crux app token locally.
+# Copy this file to config.py and configure it before starting the bridge.
+# The bridge refuses to start while the token is empty or the example WLED
+# controller below is unchanged.
 token = ""
 
 # WLED controllers and their inclusive ranges in the bridge's global LED IDs.

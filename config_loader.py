@@ -6,6 +6,7 @@ from pathlib import Path
 
 APP_CONFIG_DIR = Path(__file__).resolve().parent / "config"
 BUNDLED_CONFIG_DIR = Path("/code/config")
+EXAMPLE_WLED_CONTROLLER = {"ip": "192.0.2.10", "start": 0, "end": 399}
 
 
 def initialize_config(config_dir=APP_CONFIG_DIR, bundled_config_dir=BUNDLED_CONFIG_DIR):
@@ -34,9 +35,32 @@ def initialize_config(config_dir=APP_CONFIG_DIR, bundled_config_dir=BUNDLED_CONF
     return None
 
 
+def validate_config(config_module):
+    errors = []
+
+    token = getattr(config_module, "token", None)
+    if not isinstance(token, str) or not token.strip():
+        errors.append("token is empty")
+
+    wled_controllers = getattr(config_module, "wled_controllers", None)
+    if wled_controllers == [EXAMPLE_WLED_CONTROLLER]:
+        errors.append("wled_controllers still contains the example controller 192.0.2.10")
+
+    if errors:
+        print(
+            "ERROR: config/config.py still contains unconfigured example values: "
+            + "; ".join(errors)
+            + ". Edit config/config.py and restart the bridge.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    return config_module
+
+
 def load_config():
     try:
-        return importlib.import_module("config.config")
+        loaded_config = importlib.import_module("config.config")
     except ModuleNotFoundError as exc:
         if exc.name not in {"config", "config.config"}:
             raise
@@ -44,10 +68,12 @@ def load_config():
         if initialize_config() is not None:
             importlib.invalidate_caches()
             try:
-                return importlib.import_module("config.config")
+                loaded_config = importlib.import_module("config.config")
             except ModuleNotFoundError as retry_exc:
                 if retry_exc.name not in {"config", "config.config"}:
                     raise
+            else:
+                return validate_config(loaded_config)
 
         print(
             "ERROR: config/config.py is missing. "
@@ -55,6 +81,8 @@ def load_config():
             file=sys.stderr,
         )
         raise SystemExit(1) from None
+
+    return validate_config(loaded_config)
 
 
 config = load_config()

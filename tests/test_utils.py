@@ -32,6 +32,60 @@ import main
 
 
 class ConfigLoaderTests(unittest.TestCase):
+    def test_validate_config_accepts_configured_values(self):
+        configured = types.SimpleNamespace(
+            token="configured-token",
+            wled_controllers=[{"ip": "192.168.1.50", "start": 0, "end": 399}],
+        )
+
+        self.assertIs(config_loader.validate_config(configured), configured)
+
+    def test_validate_config_rejects_empty_token(self):
+        unconfigured = types.SimpleNamespace(
+            token="",
+            wled_controllers=[{"ip": "192.168.1.50", "start": 0, "end": 399}],
+        )
+
+        with patch.object(config_loader.sys, "stderr") as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                config_loader.validate_config(unconfigured)
+
+        message = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("token is empty", message)
+        self.assertIn("Edit config/config.py", message)
+
+    def test_validate_config_rejects_example_wled_controller(self):
+        unconfigured = types.SimpleNamespace(
+            token="configured-token",
+            wled_controllers=[{"ip": "192.0.2.10", "start": 0, "end": 399}],
+        )
+
+        with patch.object(config_loader.sys, "stderr") as stderr:
+            with self.assertRaisesRegex(SystemExit, "1"):
+                config_loader.validate_config(unconfigured)
+
+        message = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("example controller 192.0.2.10", message)
+
+    def test_load_config_exits_for_unmodified_example_values(self):
+        unconfigured = types.SimpleNamespace(
+            token="",
+            wled_controllers=[{"ip": "192.0.2.10", "start": 0, "end": 399}],
+        )
+
+        with patch.object(config_loader.sys, "stderr") as stderr:
+            with patch.object(
+                config_loader.importlib,
+                "import_module",
+                return_value=unconfigured,
+            ):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    config_loader.load_config()
+
+        message = "".join(call.args[0] for call in stderr.write.call_args_list)
+        self.assertIn("token is empty", message)
+        self.assertIn("example controller 192.0.2.10", message)
+
     def test_initialize_config_prefers_bundled_config(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
