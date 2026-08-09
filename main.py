@@ -28,6 +28,7 @@ import requests
 from templates.wall_lighting import return_wall_lighting_html
 from templates.wallselector import returnwallhtml
 from templates.language import language_switch_html
+from templates.overview import return_overview_html
 from config_loader import config
 Base = declarative_base()
 # SQLAlchemy Model for Wall
@@ -404,9 +405,9 @@ class ClimbSend(BaseModel):
 class SentPayL(BaseModel):
     payload: ClimbSend
     
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    return {"message": "Hello World"}
+    return HTMLResponse(content=return_overview_html(APP_PATH_PREFIX))
 
 
 @app.post("/viewed")

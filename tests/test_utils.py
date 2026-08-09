@@ -1128,6 +1128,31 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("Dunkel – nur Boulder", html)
         self.assertIn("Hell – freie LEDs gedimmt", html)
 
+    def test_overview_links_to_user_pages_with_path_prefix(self):
+        html = main.return_overview_html("/cruxwledbridge")
+
+        self.assertIn('action="/cruxwledbridge/listwalls"', html)
+        self.assertIn('name="gym"', html)
+        self.assertIn('href="/cruxwledbridge/wall_lighting"', html)
+        self.assertIn("map its holds to the physical LEDs", html)
+        self.assertIn("configure the celebration", html)
+
+    def test_overview_is_localized(self):
+        html = main.return_overview_html()
+
+        self.assertIn('<html lang="en">', html)
+        self.assertIn('id="language-toggle"', html)
+        self.assertIn("Wall setup", html)
+        self.assertIn("Wand einrichten", html)
+        self.assertIn("Wall lighting", html)
+        self.assertIn("Wandbeleuchtung", html)
+
+    def test_root_returns_overview_html(self):
+        response = asyncio.run(main.root())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("CRUX WLED Bridge", response.body.decode())
+
     def test_wall_lighting_routes_replace_toggle_gui_routes(self):
         routes = {(route.path, tuple(route.methods or [])) for route in main.app.routes}
 
