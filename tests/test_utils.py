@@ -737,6 +737,9 @@ class WallEndpointTests(unittest.TestCase):
         self.assertIn('<html lang="en">', html)
         self.assertIn('id="language-toggle"', html)
         self.assertIn('data-i18n="page.heading">Wall selector</h1>', html)
+        self.assertIn('data-gym-slug="kontors-keller"', html)
+        self.assertIn("window.localStorage.setItem(", html)
+        self.assertIn("'cruxwledbridge.favoriteGymSlug'", html)
         get.assert_called_once_with(
             "https://www.cruxapp.ca/api/v1/gyms/kontors-keller/gym_walls",
             headers=main.auth_header,
@@ -1146,6 +1149,18 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("Wand einrichten", html)
         self.assertIn("Wall lighting", html)
         self.assertIn("Wandbeleuchtung", html)
+
+    def test_overview_shows_and_removes_saved_gym_favorite(self):
+        html = main.return_overview_html("/cruxwledbridge")
+
+        self.assertIn('id="favorite-gym"', html)
+        self.assertIn('id="favorite-gym-link"', html)
+        self.assertIn('id="favorite-gym-remove"', html)
+        self.assertIn("window.localStorage.getItem(storageKey)", html)
+        self.assertIn("encodeURIComponent(slug)", html)
+        self.assertIn("const listWallsPath = \"/cruxwledbridge/listwalls\"", html)
+        self.assertIn("window.localStorage.removeItem(storageKey)", html)
+        self.assertIn("Favorisierte Halle entfernen", html)
 
     def test_root_returns_overview_html(self):
         response = asyncio.run(main.root())

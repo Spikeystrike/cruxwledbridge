@@ -543,6 +543,7 @@ async def list_walls(gym: str = ""):
             f'alt="{wall_name}" style="max-width:300px;"></a></div>'
         )
     language_switch = language_switch_html(WALL_LIST_TRANSLATIONS)
+    favorite_gym_slug = escape(gym, quote=True)
     html_content = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -567,6 +568,18 @@ async def list_walls(gym: str = ""):
             <h1 data-i18n="page.heading">Wall selector</h1>
             {''.join(wall_cards)}
             {language_switch}
+            <script data-gym-slug="{favorite_gym_slug}">
+                (() => {{
+                    try {{
+                        window.localStorage.setItem(
+                            'cruxwledbridge.favoriteGymSlug',
+                            document.currentScript.dataset.gymSlug,
+                        );
+                    }} catch (error) {{
+                        // The wall list remains usable when browser storage is unavailable.
+                    }}
+                }})();
+            </script>
         </body>
         </html>
     """

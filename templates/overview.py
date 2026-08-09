@@ -1,3 +1,5 @@
+import json
+
 from templates.language import language_switch_html
 
 
@@ -11,6 +13,8 @@ TRANSLATIONS = {
         "wall.gym_label": "Gym slug",
         "wall.gym_placeholder": "for example my-climbing-gym",
         "wall.open": "Open wall selection",
+        "wall.favorite": "Favorite gym",
+        "wall.favorite_remove": "Remove favorite gym",
         "lighting.heading": "Wall lighting",
         "lighting.description": "Switch between dark and bright wall lighting and configure the celebration shown after a sent climb.",
         "lighting.open": "Open lighting settings",
@@ -24,6 +28,8 @@ TRANSLATIONS = {
         "wall.gym_label": "Gym-Slug",
         "wall.gym_placeholder": "zum Beispiel meine-kletterhalle",
         "wall.open": "Wandauswahl öffnen",
+        "wall.favorite": "Favorisierte Halle",
+        "wall.favorite_remove": "Favorisierte Halle entfernen",
         "lighting.heading": "Wandbeleuchtung",
         "lighting.description": "Wechsle zwischen dunkler und heller Wandbeleuchtung und konfiguriere den Jubeleffekt nach einem Top.",
         "lighting.open": "Beleuchtungseinstellungen öffnen",
@@ -33,6 +39,7 @@ TRANSLATIONS = {
 
 def return_overview_html(path_prefix=""):
     language_switch = language_switch_html(TRANSLATIONS)
+    list_walls_path = json.dumps(f"{path_prefix}/listwalls")
     return f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -74,6 +81,42 @@ def return_overview_html(path_prefix=""):
                 border-radius: 5px;
                 font-size: 16px;
             }}
+            .favorite {{ margin-top: 20px; }}
+            .favorite-label {{
+                display: block;
+                margin-bottom: 6px;
+                font-weight: bold;
+            }}
+            .favorite-row {{
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }}
+            .favorite-link {{
+                flex: 1;
+                min-width: 0;
+                padding: 10px 12px;
+                border-radius: 5px;
+                background: #e8f2ff;
+                color: #0056b3;
+                overflow-wrap: anywhere;
+                text-decoration: none;
+            }}
+            .favorite-link:hover {{ background: #d6e9ff; }}
+            .favorite-remove {{
+                flex: none;
+                width: 32px;
+                height: 32px;
+                padding: 0;
+                border: 0;
+                border-radius: 50%;
+                background: transparent;
+                color: #666;
+                font-size: 22px;
+                line-height: 32px;
+                cursor: pointer;
+            }}
+            .favorite-remove:hover {{ background: #eee; color: #b00020; }}
             .button {{
                 display: inline-block;
                 margin-top: 14px;
@@ -104,6 +147,16 @@ def return_overview_html(path_prefix=""):
                                data-i18n-placeholder="wall.gym_placeholder">
                         <button class="button" type="submit" data-i18n="wall.open">Open wall selection</button>
                     </form>
+                    <div id="favorite-gym" class="favorite" hidden>
+                        <span class="favorite-label" data-i18n="wall.favorite">Favorite gym</span>
+                        <div class="favorite-row">
+                            <a id="favorite-gym-link" class="favorite-link" href="#"></a>
+                            <button id="favorite-gym-remove" class="favorite-remove" type="button"
+                                    aria-label="Remove favorite gym" title="Remove favorite gym"
+                                    data-i18n-aria-label="wall.favorite_remove"
+                                    data-i18n-title="wall.favorite_remove">&times;</button>
+                        </div>
+                    </div>
                 </section>
                 <section class="card">
                     <h2 data-i18n="lighting.heading">Wall lighting</h2>
@@ -113,6 +166,44 @@ def return_overview_html(path_prefix=""):
             </div>
         </main>
         {language_switch}
+        <script>
+            (() => {{
+                const storageKey = 'cruxwledbridge.favoriteGymSlug';
+                const listWallsPath = {list_walls_path};
+                const favorite = document.getElementById('favorite-gym');
+                const favoriteLink = document.getElementById('favorite-gym-link');
+                const removeButton = document.getElementById('favorite-gym-remove');
+
+                function showSavedFavorite() {{
+                    let slug = null;
+                    try {{
+                        slug = window.localStorage.getItem(storageKey);
+                    }} catch (error) {{
+                        // The form remains usable when browser storage is unavailable.
+                    }}
+
+                    if (!slug) {{
+                        favorite.hidden = true;
+                        return;
+                    }}
+
+                    favoriteLink.textContent = slug;
+                    favoriteLink.href = `${{listWallsPath}}?gym=${{encodeURIComponent(slug)}}`;
+                    favorite.hidden = false;
+                }}
+
+                removeButton.addEventListener('click', () => {{
+                    try {{
+                        window.localStorage.removeItem(storageKey);
+                    }} catch (error) {{
+                        // Keep the UI usable when browser storage is unavailable.
+                    }}
+                    favorite.hidden = true;
+                }});
+
+                showSavedFavorite();
+            }})();
+        </script>
     </body>
     </html>
     """
