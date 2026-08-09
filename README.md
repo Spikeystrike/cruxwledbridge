@@ -1,6 +1,19 @@
 # CRUX App to WLED Bridge
 This small python script is a quick and dirty Crux App to WLED Bridge. The workflow is following:
 
+## Differences from raphirm/cruxwledbridge
+
+This repository is based on [raphirm/cruxwledbridge](https://github.com/raphirm/cruxwledbridge), but extends it in the following areas:
+
+- **Deployment and configuration:** Three Docker Compose variants cover direct access, a bundled nginx proxy, and an existing external proxy. Database and configuration data are persisted in dedicated directories, sub-path hosting is supported through `APP_PATH_PREFIX`, and containers use the host timezone for log timestamps. An empty config mount is initialized automatically; unchanged example values, missing templates, and unwritable mounts produce clear startup errors.
+- **Flexible LED hardware:** Multiple WLED controllers can be configured with non-overlapping physical LED ranges. `hole2LEDS` separates logical CRUX hold IDs from physical LEDs, allowing unused LEDs and multiple LEDs per hold.
+- **Wall mapping:** Standard and alternating grids are supported, including odd column counts and either alternating-row offset. The LED cable may start in any corner and snake horizontally or vertically. Individual grid positions can be disabled, and saved corners, layout settings, and exclusions can be reopened and edited. Mappings are scoped by wall ID so identical hold IDs on different walls do not collide.
+- **User interface:** The root URL is an English/German overview page linking to wall setup and lighting controls. A successfully loaded gym slug is remembered locally in the browser as a directly accessible favorite and can be removed again.
+- **Lighting controls and events:** Dark and bright wall modes are available. A `climb.sent` gym webhook can trigger a configurable celebration effect; the selected effect is stored in SQLite, can be disabled, and restores the latest viewed climb afterward. Access logging includes useful webhook details without duplicate Uvicorn access entries.
+- **Automated coverage:** Regression tests cover configuration startup, mapping layouts, multi-controller output, UI navigation, lighting modes, celebrations, and webhook behavior.
+
+> **Maintenance rule:** Whenever behavior in this repository is added, removed, or changed relative to `raphirm/cruxwledbridge`, update this section in the same commit.
+
 ## Setup Container
 To get the bridge running, I recommend using a proxy for authenticating all URLs except `https://<bridge>/viewed`.
 
