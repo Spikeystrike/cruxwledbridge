@@ -8,6 +8,7 @@ TRANSLATIONS = {
         "page.description": "Choose the lighting mode for the climbing wall.",
         "mode.dark_button": "Dark – boulder only",
         "mode.bright_button": "Bright – dim unused LEDs",
+        "mode.brightness": "Bright mode strength: {value}%",
         "mode.dark": "dark",
         "mode.bright": "bright",
         "status.switching": "Switching...",
@@ -32,6 +33,7 @@ TRANSLATIONS = {
         "page.description": "Wähle den Beleuchtungsmodus für die Kletterwand.",
         "mode.dark_button": "Dunkel – nur Boulder",
         "mode.bright_button": "Hell – freie LEDs gedimmt",
+        "mode.brightness": "Stärke im hellen Modus: {value}%",
         "mode.dark": "dunkel",
         "mode.bright": "hell",
         "status.switching": "Wird umgeschaltet...",
@@ -53,7 +55,11 @@ TRANSLATIONS = {
 }
 
 
-def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
+def return_wall_lighting_html(
+    path_prefix="",
+    celebration_effect="rainbow",
+    bright_brightness_percent=20,
+):
     language_switch = language_switch_html(TRANSLATIONS)
     html = """
     <!DOCTYPE html>
@@ -70,6 +76,9 @@ def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
             #btn-dark:hover { background-color: #333; }
             #btn-bright { background-color: #007BFF; }
             #btn-bright:hover { background-color: #0056b3; }
+            .brightness-control { width: min(420px, calc(100vw - 48px)); margin: 12px 0 4px; text-align: center; }
+            .brightness-control label { display: block; margin-bottom: 8px; font-weight: bold; }
+            .brightness-control input { width: 100%; }
             #status { margin-top: 20px; font-weight: bold; font-size: 1.1em; }
             .celebration { margin-top: 32px; padding-top: 22px; border-top: 1px solid #ccc; text-align: center; max-width: 520px; }
             .celebration h2 { color: #333; margin-bottom: 8px; }
@@ -85,6 +94,10 @@ def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
         <div>
             <button class="mode-button" id="btn-dark" onclick="setMode('dark')" data-i18n="mode.dark_button">Dark – boulder only</button>
             <button class="mode-button" id="btn-bright" onclick="setMode('bright')" data-i18n="mode.bright_button">Bright – dim unused LEDs</button>
+        </div>
+        <div class="brightness-control">
+            <label for="bright-brightness" id="bright-brightness-label">Bright mode strength: __BRIGHT_BRIGHTNESS__%</label>
+            <input id="bright-brightness" type="range" min="10" max="100" step="1" value="__BRIGHT_BRIGHTNESS__">
         </div>
         <div id="status"></div>
 
@@ -109,7 +122,17 @@ def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
             const statusState = { kind: 'idle' };
             const celebrationStatusState = { kind: 'idle' };
             const celebrationSelect = document.getElementById('celebration-effect');
+            const brightnessInput = document.getElementById('bright-brightness');
             celebrationSelect.value = '__CELEBRATION_EFFECT__';
+
+            function renderBrightnessLabel() {
+                document.getElementById('bright-brightness-label').textContent = window.cruxI18n.t(
+                    'mode.brightness',
+                    { value: brightnessInput.value },
+                );
+            }
+
+            brightnessInput.addEventListener('input', renderBrightnessLabel);
 
             function renderStatus() {
                 const statusDiv = document.getElementById('status');
@@ -135,7 +158,10 @@ def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify({ mode: mode }),
+                        body: JSON.stringify({
+                            mode: mode,
+                            brightness: Number(brightnessInput.value),
+                        }),
                     });
                     const result = await response.json();
                     if (response.ok) {
@@ -199,8 +225,11 @@ def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
 
             window.addEventListener('crux-language-change', () => {
                 renderStatus();
+                renderBrightnessLabel();
                 renderCelebrationStatus();
             });
+
+            renderBrightnessLabel();
         </script>
     </body>
     </html>
@@ -208,6 +237,9 @@ def return_wall_lighting_html(path_prefix="", celebration_effect="rainbow"):
     return html.replace("__PATH_PREFIX__", path_prefix).replace(
         "__CELEBRATION_EFFECT__",
         celebration_effect,
+    ).replace(
+        "__BRIGHT_BRIGHTNESS__",
+        str(bright_brightness_percent),
     ).replace(
         "__LANGUAGE_SWITCH__",
         language_switch,

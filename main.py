@@ -101,6 +101,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
 wall_lighting_mode = "dark"  # "dark" or "bright"
+bright_wall_brightness_percent = 20
 current_wall_holds = {}
 _pending_viewed_holds = None
 celebration_duration_seconds = float(
@@ -156,6 +157,7 @@ async def _restore_current_wall():
         sendLightToBoulderwall,
         dict(current_wall_holds),
         wall_lighting_mode,
+        bright_wall_brightness_percent,
     )
 
 
@@ -306,6 +308,7 @@ register_exception(app)
 
 class WallLightingMode(BaseModel):
     mode: str
+    brightness: Optional[int] = Field(default=None, ge=10, le=100)
 
 
 class CelebrationEffectSelection(BaseModel):
@@ -441,6 +444,7 @@ async def viewed(payload: PayL, request: Request):
                     sendLightToBoulderwall,
                     holds,
                     wall_lighting_mode,
+                    bright_wall_brightness_percent,
                 )
         db.close()
     except Exception as e:
@@ -470,10 +474,15 @@ async def sent(payload: SentPayL, request: Request):
 
 @app.post("/wall_lighting_mode")
 async def set_wall_lighting_mode(payload: WallLightingMode):
-    global wall_lighting_mode
+    global wall_lighting_mode, bright_wall_brightness_percent
     if payload.mode in ["dark", "bright"]:
         wall_lighting_mode = payload.mode
-        return {"message": f"Wall lighting mode set to {payload.mode}"}
+        if payload.brightness is not None:
+            bright_wall_brightness_percent = payload.brightness
+        return {
+            "message": f"Wall lighting mode set to {payload.mode}",
+            "brightness": bright_wall_brightness_percent,
+        }
     else:
         return JSONResponse(status_code=400, content={"message": "Invalid mode. Use 'dark' or 'bright'."})
 
@@ -501,7 +510,11 @@ async def set_celebration_effect(payload: CelebrationEffectSelection):
 
 @app.get("/wall_lighting", response_class=HTMLResponse)
 async def get_wall_lighting():
-    html_content = return_wall_lighting_html(APP_PATH_PREFIX, celebration_effect)
+    html_content = return_wall_lighting_html(
+        APP_PATH_PREFIX,
+        celebration_effect,
+        bright_wall_brightness_percent,
+    )
     return HTMLResponse(content=html_content)
 
 @app.get("/lightID/{color}/{led_id}")

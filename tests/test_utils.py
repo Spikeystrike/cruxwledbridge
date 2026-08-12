@@ -311,7 +311,7 @@ class AccessLoggingTests(unittest.TestCase):
             request.state.viewed_climb,
             {"id": 321, "name": "Blue Moon", "wall_id": 44},
         )
-        send_lights.assert_called_once_with({}, "dark")
+        send_lights.assert_called_once_with({}, "dark", 20)
         session_local.return_value.close.assert_called_once_with()
 
 
@@ -322,6 +322,7 @@ class CelebrationTests(unittest.TestCase):
         self.original_holds = main.current_wall_holds
         self.original_pending_holds = main._pending_viewed_holds
         self.original_mode = main.wall_lighting_mode
+        self.original_brightness = main.bright_wall_brightness_percent
         self.original_generation = main._celebration_generation
         self.original_active = main._celebration_active
 
@@ -331,6 +332,7 @@ class CelebrationTests(unittest.TestCase):
         main.current_wall_holds = self.original_holds
         main._pending_viewed_holds = self.original_pending_holds
         main.wall_lighting_mode = self.original_mode
+        main.bright_wall_brightness_percent = self.original_brightness
         main._celebration_generation = self.original_generation
         main._celebration_active = self.original_active
 
@@ -408,13 +410,14 @@ class CelebrationTests(unittest.TestCase):
         main.current_wall_holds = {2: "start"}
         main._pending_viewed_holds = {1: "finish"}
         main.wall_lighting_mode = "bright"
+        main.bright_wall_brightness_percent = 65
         main._celebration_generation = 8
         main._celebration_active = True
 
         asyncio.run(main._run_celebration("rainbow", 8))
 
         play_effect.assert_called_once_with("rainbow")
-        send_lights.assert_called_once_with({1: "finish"}, "bright")
+        send_lights.assert_called_once_with({1: "finish"}, "bright", 65)
         self.assertEqual(main.current_wall_holds, {1: "finish"})
         self.assertIsNone(main._pending_viewed_holds)
         self.assertFalse(main._celebration_active)
@@ -1122,7 +1125,11 @@ class PathPrefixTests(unittest.TestCase):
         self.assertEqual(main.normalize_path_prefix("/"), "")
 
     def test_wall_lighting_uses_path_prefix(self):
-        html = main.return_wall_lighting_html("/cruxwledbridge", "fireworks")
+        html = main.return_wall_lighting_html(
+            "/cruxwledbridge",
+            "fireworks",
+            65,
+        )
 
         self.assertIn("fetch('/cruxwledbridge/wall_lighting_mode'", html)
         self.assertIn("fetch('/cruxwledbridge/celebration_effect'", html)
@@ -1130,6 +1137,10 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("Wand-Beleuchtungsmodus", html)
         self.assertIn("Dunkel – nur Boulder", html)
         self.assertIn("Hell – freie LEDs gedimmt", html)
+        self.assertIn('min="10" max="100"', html)
+        self.assertIn('value="65"', html)
+        self.assertIn("brightness: Number(brightnessInput.value)", html)
+        self.assertIn("Stärke im hellen Modus: {value}%", html)
 
     def test_overview_links_to_user_pages_with_path_prefix(self):
         html = main.return_overview_html("/cruxwledbridge")
@@ -1179,15 +1190,32 @@ class PathPrefixTests(unittest.TestCase):
 
     def test_wall_lighting_mode_updates_server_state(self):
         original_mode = main.wall_lighting_mode
+        original_brightness = main.bright_wall_brightness_percent
         try:
             result = asyncio.run(
-                main.set_wall_lighting_mode(main.WallLightingMode(mode="bright"))
+                main.set_wall_lighting_mode(
+                    main.WallLightingMode(mode="bright", brightness=65)
+                )
             )
 
             self.assertEqual(main.wall_lighting_mode, "bright")
-            self.assertEqual(result, {"message": "Wall lighting mode set to bright"})
+            self.assertEqual(main.bright_wall_brightness_percent, 65)
+            self.assertEqual(
+                result,
+                {
+                    "message": "Wall lighting mode set to bright",
+                    "brightness": 65,
+                },
+            )
         finally:
             main.wall_lighting_mode = original_mode
+            main.bright_wall_brightness_percent = original_brightness
+
+    def test_wall_lighting_brightness_rejects_values_outside_range(self):
+        for brightness in (9, 101):
+            with self.subTest(brightness=brightness):
+                with self.assertRaises(ValueError):
+                    main.WallLightingMode(mode="bright", brightness=brightness)
 
     def test_wall_selector_uses_path_prefix(self):
         html = main.returnwallhtml(
@@ -1481,6 +1509,27 @@ class WledTests(unittest.TestCase):
                 },
             ),
         )
+
+    @patch("utils.requests.post")
+    def test_bright_mode_background_strength_is_adjustable(self, post):
+        post.return_value = Mock()
+
+        utils.sendLightToBoulderwall(
+            {1: "start"},
+            mode="bright",
+            bright_brightness_percent=10,
+        )
+        ten_percent_pixels = post.call_args_list[-1].kwargs["json"]["seg"]["i"]
+
+        utils.sendLightToBoulderwall(
+            {1: "start"},
+            mode="bright",
+            bright_brightness_percent=100,
+        )
+        full_brightness_pixels = post.call_args_list[-1].kwargs["json"]["seg"]["i"]
+
+        self.assertEqual(ten_percent_pixels, [0, "1A1A1A", 1, "FF0000", 2, "1A1A1A"])
+        self.assertEqual(full_brightness_pixels, [0, "FFFFFF", 1, "FF0000", 2, "FFFFFF"])
 
     @patch("utils.requests.post")
     def test_hole_mapping_can_skip_physical_leds_and_use_multiple_leds(self, post):

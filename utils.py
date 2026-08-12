@@ -158,9 +158,14 @@ def ledCalculation(holds, full_grid, position_led_ids):
     return holds2led
 
 
-def sendLightToBoulderwall(holds, mode="dark"):
+def sendLightToBoulderwall(holds, mode="dark", bright_brightness_percent=20):
+    if not 10 <= bright_brightness_percent <= 100:
+        raise ValueError("Bright wall brightness must be between 10 and 100 percent")
+
     colors = config.colors
     hole2LEDS = config.hole2LEDS
+    bright_channel = round(255 * bright_brightness_percent / 100)
+    bright_background_color = f"{bright_channel:02X}" * 3
     led = {}
     for hole_id, hold_type in holds.items():
         for physical_led_id in hole2LEDS[hole_id]:
@@ -174,7 +179,7 @@ def sendLightToBoulderwall(holds, mode="dark"):
         for global_led_id in range(controller["start"], controller["end"] + 1):
             color = led.get(global_led_id)
             if color is None and mode == "bright":
-                color = "333333"
+                color = bright_background_color
             if color is not None:
                 pixels.extend([global_led_id - controller["start"], color])
 
