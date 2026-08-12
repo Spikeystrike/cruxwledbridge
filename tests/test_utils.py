@@ -1118,6 +1118,110 @@ class DefineHoldsTests(unittest.TestCase):
             {2: 0, 3: 1, 4: 2, 6: 3, 7: 4, 8: 5},
         )
 
+    def test_multiple_grids_continue_global_led_ids_in_tab_order(self):
+        db = main.SessionLocal()
+        wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
+        wall.holds = [
+            {"id": "left-hold", "mask": [[0, 0], [0, 0]]},
+            {"id": "right-hold", "mask": [[100, 0], [100, 0]]},
+        ]
+        db.commit()
+        db.close()
+
+        payload = main.MultiGridWallTranslation(
+            wallid=self.wall_id,
+            grids=[
+                main.GridTranslation(
+                    id="left-wall",
+                    p1x=0, p1y=0, p2x=10, p2y=0,
+                    p3x=10, p3y=10, p4x=0, p4y=10,
+                    r=1, c=2,
+                ),
+                main.GridTranslation(
+                    id="right-wall",
+                    p1x=100, p1y=0, p2x=110, p2y=0,
+                    p3x=110, p3y=10, p4x=100, p4y=10,
+                    r=1, c=2,
+                ),
+            ],
+        )
+
+        result = asyncio.run(main.define_holds(payload))
+
+        self.assertEqual(result["grids"][0]["position_led_ids"], {0: 0, 1: 1})
+        self.assertEqual(result["grids"][0]["led_start"], 0)
+        self.assertEqual(result["grids"][0]["led_end"], 1)
+        self.assertEqual(result["grids"][1]["position_led_ids"], {0: 2, 1: 3})
+        self.assertEqual(result["grids"][1]["led_start"], 2)
+        self.assertEqual(result["grids"][1]["led_end"], 3)
+        self.assertEqual(result["holds2led"], {"left-hold": 0, "right-hold": 2})
+
+        db = main.SessionLocal()
+        saved = db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).one()
+        self.assertEqual([grid["id"] for grid in saved.settings["grids"]], [
+            "left-wall", "right-wall",
+        ])
+        self.assertEqual(saved.settings["holds2led"], {
+            "left-hold": 0,
+            "right-hold": 2,
+        })
+        db.close()
+
+    def test_reordering_grids_reassigns_global_led_ranges(self):
+        db = main.SessionLocal()
+        wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
+        wall.holds = [
+            {"id": "left-hold", "mask": [[0, 0], [0, 0]]},
+            {"id": "right-hold", "mask": [[100, 0], [100, 0]]},
+        ]
+        db.commit()
+        db.close()
+
+        right_grid = main.GridTranslation(
+            id="right-wall",
+            p1x=100, p1y=0, p2x=110, p2y=0,
+            p3x=110, p3y=10, p4x=100, p4y=10,
+            r=1, c=2,
+        )
+        left_grid = main.GridTranslation(
+            id="left-wall",
+            p1x=0, p1y=0, p2x=10, p2y=0,
+            p3x=10, p3y=10, p4x=0, p4y=10,
+            r=1, c=2,
+        )
+
+        result = asyncio.run(main.define_holds(main.MultiGridWallTranslation(
+            wallid=self.wall_id,
+            grids=[right_grid, left_grid],
+        )))
+
+        self.assertEqual(result["holds2led"], {"left-hold": 2, "right-hold": 0})
+        self.assertEqual(result["grids"][0]["id"], "right-wall")
+        self.assertEqual(result["grids"][0]["led_start"], 0)
+        self.assertEqual(result["grids"][1]["id"], "left-wall")
+        self.assertEqual(result["grids"][1]["led_start"], 2)
+
+    def test_each_grid_must_keep_an_active_position(self):
+        payload = main.MultiGridWallTranslation(
+            wallid=self.wall_id,
+            grids=[main.GridTranslation(
+                id="disabled-grid",
+                p1x=0, p1y=0, p2x=10, p2y=0,
+                p3x=10, p3y=10, p4x=0, p4y=10,
+                r=1, c=2,
+                excluded_position_ids=[0, 1],
+            )],
+        )
+
+        with self.assertRaises(main.HTTPException) as raised:
+            asyncio.run(main.define_holds(payload))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("Grid 1", raised.exception.detail)
+        self.assertIn("at least one", raised.exception.detail)
+
 
 class PathPrefixTests(unittest.TestCase):
     def test_normalizes_path_prefix(self):
@@ -1235,9 +1339,9 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn('<label for="columns" data-i18n="form.columns">Columns:</label>', html)
         self.assertNotIn('<label for="rows">R:', html)
         self.assertNotIn('<label for="columns">C:', html)
-        self.assertGreaterEqual(html.count('<div class="form-row">'), 4)
+        self.assertGreaterEqual(html.count('<div class="form-row">'), 3)
         self.assertIn('id="alternating"', html)
-        self.assertIn("alternating: alternating", html)
+        self.assertIn("alternating: Boolean(grid.alternating)", html)
         self.assertIn('id="alternating-start"', html)
         self.assertIn(
             '<option value="0" data-i18n="form.not_offset">Not offset</option>',
@@ -1247,7 +1351,10 @@ class PathPrefixTests(unittest.TestCase):
             '<option value="1" data-i18n="form.offset">Offset</option>',
             html,
         )
-        self.assertIn("alternating_start_column: alternatingStartColumn", html)
+        self.assertIn(
+            "alternating_start_column: Number(grid.alternating_start_column || 0)",
+            html,
+        )
 
     def test_wall_selector_reset_clears_all_rendered_points(self):
         html = main.returnwallhtml(
@@ -1282,8 +1389,8 @@ class PathPrefixTests(unittest.TestCase):
             '<option value="vertical" data-i18n="form.vertical" selected>Vertical (column by column)</option>',
             html,
         )
-        self.assertIn("led_start_corner: ledStartCorner", html)
-        self.assertIn("led_direction: ledDirection", html)
+        self.assertIn("led_start_corner: grid.led_start_corner", html)
+        self.assertIn("led_direction: grid.led_direction", html)
 
     def test_pages_default_to_english_and_offer_opposite_flag(self):
         wall_selector = main.returnwallhtml(
@@ -1326,7 +1433,7 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("window.addEventListener('crux-language-change'", html)
         self.assertIn("t('status.grid'", html)
         self.assertIn("t('grid.excluded_title')", html)
-        self.assertIn("alert(t('alert.four_points'))", html)
+        self.assertIn("alert(t('alert.incomplete_grid'", html)
 
     def test_wall_selector_can_exclude_rendered_positions(self):
         html = main.returnwallhtml(
@@ -1335,8 +1442,8 @@ class PathPrefixTests(unittest.TestCase):
         )
 
         self.assertIn("excludedPositionIds.has(positionId)", html)
-        self.assertIn("excluded_position_ids: Array.from(excludedPositionIds)", html)
-        self.assertIn("Auswahl speichern", html)
+        self.assertIn("grid.excluded_position_ids = Array.from(excludedPositionIds)", html)
+        self.assertIn("Alle Raster speichern", html)
 
     def test_wall_selector_maps_display_pixels_to_original_image_pixels(self):
         html = main.returnwallhtml(
@@ -1356,7 +1463,10 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("y * coordinateHeight() / rect.height", html)
         self.assertIn("function imageToDisplay(point)", html)
         self.assertIn("point.x * rect.width / coordinateWidth()", html)
-        self.assertIn("points.push(displayToImage(x, y))", html)
+        self.assertIn(
+            "points.push(displayToImage(event.clientX - rect.left, event.clientY - rect.top))",
+            html,
+        )
         self.assertIn("const rect = climbingImage.getBoundingClientRect()", html)
         self.assertIn("window.addEventListener('resize'", html)
 
@@ -1412,7 +1522,7 @@ class PathPrefixTests(unittest.TestCase):
         )
 
         self.assertIn("new ResizeObserver(() =>", html)
-        self.assertIn("if (!savedCreationInitialized) return", html)
+        self.assertIn("if (savedCreationInitialized) redraw()", html)
         self.assertIn(".observe(climbingImage)", html)
 
     def test_wall_selector_restores_saved_creation(self):
@@ -1443,10 +1553,38 @@ class PathPrefixTests(unittest.TestCase):
 
         self.assertIn('"r":18,"c":11,"alternating":true', html)
         self.assertIn('"led_start_corner":"top_right"', html)
-        self.assertIn('let points = savedCreation.points || []', html)
-        self.assertIn('rows.value = savedCreation.r', html)
-        self.assertIn('excludedPositionIds = new Set(savedCreation.excluded_position_ids || [])', html)
+        self.assertIn(
+            "const savedGrids = Array.isArray(savedCreation.grids)",
+            html,
+        )
+        self.assertIn(
+            "const savedGrids = Array.isArray(savedCreation.grids) && savedCreation.grids.length ? savedCreation.grids : [savedCreation]",
+            html,
+        )
+        self.assertIn("rows.value = grid.r ?? ''", html)
+        self.assertIn(
+            "excludedPositionIds = new Set((grid.excluded_position_ids || []).map(Number))",
+            html,
+        )
         self.assertIn("climbingImage.addEventListener('load', initializeSavedCreation", html)
+
+    def test_wall_selector_manages_ordered_grid_tabs(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+        )
+
+        self.assertIn('id="grid-tabs"', html)
+        self.assertIn("add.id = 'add-grid-btn'", html)
+        self.assertIn("grids.push(createEmptyGrid())", html)
+        self.assertIn("tab.draggable = true", html)
+        self.assertIn("moveGrid(Number(event.dataTransfer.getData('text/plain')), index)", html)
+        self.assertIn("remove.className = 'grid-tab-delete'", html)
+        self.assertIn("grids.splice(index, 1)", html)
+        self.assertIn("grids: grids.map((grid) => ({", html)
+        self.assertIn("let offset = 0", html)
+        self.assertIn("grid.led_start = offset", html)
+        self.assertIn("offset += activeIds.length", html)
 
 
 class WledTests(unittest.TestCase):

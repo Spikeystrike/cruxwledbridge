@@ -10,7 +10,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, logger
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
-from typing import List, Optional
+from typing import List, Optional, Union
 import json
 from utils import (
     CELEBRATION_EFFECTS,
@@ -349,8 +349,8 @@ class Send(BaseModel):
     repeat: bool
     send_date: str
     user: User
-class WallTranslation(BaseModel):
-    wallid: int
+class GridTranslation(BaseModel):
+    id: Optional[str] = None
     p1x: int
     p1y: int 
     p2x: int 
@@ -366,6 +366,17 @@ class WallTranslation(BaseModel):
     led_start_corner: str = "bottom_left"
     led_direction: str = "vertical"
     excluded_position_ids: List[int] = Field(default_factory=list)
+
+
+class WallTranslation(GridTranslation):
+    wallid: int
+
+
+class MultiGridWallTranslation(BaseModel):
+    wallid: int
+    grids: List[GridTranslation]
+
+
 class Climb(BaseModel):
     id: int
     wall_id: int
@@ -662,69 +673,120 @@ async def wall_creation(id: str = ""):
 
 
 @app.post("/defineholds")
-async def define_holds(payload: WallTranslation):
-    points = [(payload.p1x, payload.p1y) ,(payload.p2x, payload.p2y),(payload.p3x, payload.p3y),(payload.p4x, payload.p4y)]
-    # Die Punkte werden in der Reihenfolge vom Frontend übernommen:
-    # 0: links-oben (ul), 1: rechts-oben (ur), 2: rechts-unten (lr), 3: links-unten (ll)
-    ul = points[0]
-    ur = points[1]
-    lr = points[2]
-    ll = points[3]
-
+async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]):
     db = SessionLocal()
-    c = payload.c 
-    r = payload.r
     existing_wall = db.query(WallDB).filter(WallDB.id == payload.wallid).first()
     if existing_wall is None:
         db.close()
         raise HTTPException(status_code=404, detail="Wall not found")
-    try:
-        full_grid = generate_grid(
-            ul,
-            ur,
-            lr,
-            ll,
-            r,
-            c,
-            alternating=payload.alternating,
-            alternating_start_column=payload.alternating_start_column,
-            led_start_corner=payload.led_start_corner,
-            led_direction=payload.led_direction,
-        )  # lu, ru, rb, lb
-    except ValueError as exc:
-        db.close()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    excluded_position_ids = set(payload.excluded_position_ids)
-    unknown_position_ids = excluded_position_ids.difference(full_grid)
-    if unknown_position_ids:
+    multi_grid = isinstance(payload, MultiGridWallTranslation)
+    grid_payloads = payload.grids if multi_grid else [payload]
+    if not grid_payloads:
         db.close()
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown grid position IDs: {sorted(unknown_position_ids)}",
-        )
+        raise HTTPException(status_code=400, detail="At least one grid is required")
 
-    active_position_ids = [
-        position_id
-        for position_id in sorted(full_grid)
-        if position_id not in excluded_position_ids
-    ]
-    position_led_ids = {
-        position_id: led_id
-        for led_id, position_id in enumerate(active_position_ids)
-    }
-    grid = {
-        led_id: full_grid[position_id]
-        for position_id, led_id in position_led_ids.items()
-    }
-    if not grid:
-        db.close()
-        raise HTTPException(status_code=400, detail="At least one grid position must remain active")
+    combined_positions = {}
+    combined_position_led_ids = {}
+    combined_grid = {}
+    saved_grids = []
+    led_offset = 0
+
+    for grid_index, grid_payload in enumerate(grid_payloads):
+        points = [
+            (grid_payload.p1x, grid_payload.p1y),
+            (grid_payload.p2x, grid_payload.p2y),
+            (grid_payload.p3x, grid_payload.p3y),
+            (grid_payload.p4x, grid_payload.p4y),
+        ]
+        # Point order from the frontend: upper-left, upper-right,
+        # lower-right, lower-left.
+        ul, ur, lr, ll = points
+        try:
+            full_grid = generate_grid(
+                ul,
+                ur,
+                lr,
+                ll,
+                grid_payload.r,
+                grid_payload.c,
+                alternating=grid_payload.alternating,
+                alternating_start_column=grid_payload.alternating_start_column,
+                led_start_corner=grid_payload.led_start_corner,
+                led_direction=grid_payload.led_direction,
+            )
+        except ValueError as exc:
+            db.close()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Grid {grid_index + 1}: {exc}",
+            ) from exc
+
+        excluded_position_ids = set(grid_payload.excluded_position_ids)
+        unknown_position_ids = excluded_position_ids.difference(full_grid)
+        if unknown_position_ids:
+            db.close()
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Grid {grid_index + 1}: unknown grid position IDs: "
+                    f"{sorted(unknown_position_ids)}"
+                ),
+            )
+
+        active_position_ids = [
+            position_id
+            for position_id in sorted(full_grid)
+            if position_id not in excluded_position_ids
+        ]
+        if not active_position_ids:
+            db.close()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Grid {grid_index + 1}: at least one grid position must remain active",
+            )
+
+        position_led_ids = {
+            position_id: led_offset + local_led_id
+            for local_led_id, position_id in enumerate(active_position_ids)
+        }
+        grid = {
+            led_id: full_grid[position_id]
+            for position_id, led_id in position_led_ids.items()
+        }
+        combined_grid.update(grid)
+        for position_id, coordinates in full_grid.items():
+            combined_id = (grid_index, position_id)
+            combined_positions[combined_id] = coordinates
+            if position_id in position_led_ids:
+                combined_position_led_ids[combined_id] = position_led_ids[position_id]
+
+        saved_grids.append({
+            "id": grid_payload.id or f"grid-{grid_index + 1}",
+            "points": [
+                {"x": grid_payload.p1x, "y": grid_payload.p1y},
+                {"x": grid_payload.p2x, "y": grid_payload.p2y},
+                {"x": grid_payload.p3x, "y": grid_payload.p3y},
+                {"x": grid_payload.p4x, "y": grid_payload.p4y},
+            ],
+            "r": grid_payload.r,
+            "c": grid_payload.c,
+            "alternating": grid_payload.alternating,
+            "alternating_start_column": grid_payload.alternating_start_column,
+            "led_start_corner": grid_payload.led_start_corner,
+            "led_direction": grid_payload.led_direction,
+            "excluded_position_ids": sorted(excluded_position_ids),
+            "positions": full_grid,
+            "position_led_ids": position_led_ids,
+            "led_start": led_offset,
+            "led_end": led_offset + len(active_position_ids) - 1,
+        })
+        led_offset += len(active_position_ids)
 
     holds2led = ledCalculation(
         existing_wall.holds,
-        full_grid,
-        position_led_ids,
+        combined_positions,
+        combined_position_led_ids,
     )
     db.query(Hold2ledDB).filter(
         Hold2ledDB.holdid.like(f"{payload.wallid}_%")
@@ -738,26 +800,22 @@ async def define_holds(payload: WallTranslation):
         db.add(hold2db)
 
     saved_settings = {
-        "points": [
-            {"x": payload.p1x, "y": payload.p1y},
-            {"x": payload.p2x, "y": payload.p2y},
-            {"x": payload.p3x, "y": payload.p3y},
-            {"x": payload.p4x, "y": payload.p4y},
-        ],
-        "r": r,
-        "c": c,
-        "alternating": payload.alternating,
-        "alternating_start_column": payload.alternating_start_column,
-        "led_start_corner": payload.led_start_corner,
-        "led_direction": payload.led_direction,
         "coordinate_space": "wall_image",
         "coordinate_width": existing_wall.image_width,
         "coordinate_height": existing_wall.image_height,
-        "excluded_position_ids": sorted(excluded_position_ids),
-        "positions": full_grid,
-        "position_led_ids": position_led_ids,
+        "grids": saved_grids,
         "holds2led": holds2led,
     }
+    if not multi_grid:
+        # Keep the previous JSON and response shape for existing installations
+        # and clients that still submit one flat grid.
+        saved_settings = {
+            **saved_grids[0],
+            "coordinate_space": "wall_image",
+            "coordinate_width": existing_wall.image_width,
+            "coordinate_height": existing_wall.image_height,
+            "holds2led": holds2led,
+        }
     saved_creation = db.query(WallCreationDB).filter(
         WallCreationDB.wallid == payload.wallid
     ).first()
@@ -768,14 +826,19 @@ async def define_holds(payload: WallTranslation):
     db.commit()
     db.close()
 
-    return {
+    response = {
         "message":       "Holds 2 LED Saved",
-        "grid": grid,
-        "positions": full_grid,
-        "position_led_ids": position_led_ids,
-        "excluded_position_ids": sorted(excluded_position_ids),
+        "grid": combined_grid,
+        "grids": saved_grids,
         "holds2led": holds2led,
     }
+    if not multi_grid:
+        response.update({
+            "positions": saved_grids[0]["positions"],
+            "position_led_ids": saved_grids[0]["position_led_ids"],
+            "excluded_position_ids": saved_grids[0]["excluded_position_ids"],
+        })
+    return response
 
 
 
