@@ -166,6 +166,68 @@ def generate_grid(
     return grid
 
 
+def positions_near_holds(holds, grids, proximity_ratio=0.45):
+    """Return grid positions that have a CRUX hold at or near them.
+
+    The tolerance follows the local grid spacing so the heuristic keeps
+    working for differently sized and perspective-distorted wall images.
+    Each hold is assigned to at most one position across all grids.
+    """
+    flattened_positions = {
+        (grid_index, position_id): np.asarray(coordinates, dtype=float)
+        for grid_index, grid in enumerate(grids)
+        for position_id, coordinates in grid.items()
+    }
+    if not flattened_positions:
+        return set()
+
+    local_spacings = {}
+    for (grid_index, position_id), point in flattened_positions.items():
+        neighbour_distances = sorted(
+            distance
+            for (other_grid_index, other_position_id), other_point
+            in flattened_positions.items()
+            if other_grid_index == grid_index
+            and other_position_id != position_id
+            and (distance := np.linalg.norm(other_point - point)) > 0
+        )
+        local_spacings[(grid_index, position_id)] = (
+            float(np.median(neighbour_distances[:4]))
+            if neighbour_distances
+            else 0.0
+        )
+
+    occupied_positions = set()
+    for hold in holds or []:
+        mask_points = np.asarray(hold.get("mask", []), dtype=float)
+        if (
+            mask_points.ndim != 2
+            or mask_points.shape[0] == 0
+            or mask_points.shape[1] != 2
+            or not np.isfinite(mask_points).all()
+        ):
+            continue
+
+        center = np.mean(mask_points, axis=0)
+        nearest_position = min(
+            flattened_positions,
+            key=lambda key: np.linalg.norm(flattened_positions[key] - center),
+        )
+        distance = np.linalg.norm(flattened_positions[nearest_position] - center)
+        hold_radius = max(
+            (np.linalg.norm(mask_point - center) for mask_point in mask_points),
+            default=0.0,
+        )
+        tolerance = max(
+            local_spacings[nearest_position] * proximity_ratio,
+            hold_radius,
+        )
+        if distance <= tolerance:
+            occupied_positions.add(nearest_position)
+
+    return occupied_positions
+
+
 def ledCalculation(holds, full_grid, position_led_ids):
     holds2led = {}
     for hold in holds:

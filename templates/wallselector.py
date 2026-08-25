@@ -34,7 +34,7 @@ TRANSLATIONS = {
         "help.numbering": "The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.",
         "help.corners": "Click the 4 corner points in this order:",
         "help.corner_order": "Top left, top right, bottom right, bottom left",
-        "help.selection": "After calculating, click grid points to disable or reactivate them. Then click",
+        "help.selection": "New or geometrically changed grids automatically disable positions without a nearby CRUX hold. Click any grid point to disable or reactivate it. Then click",
         "help.save_selection": "Save all grids",
         "image.alt": "Climbing wall",
         "button.send": "Save all grids",
@@ -81,7 +81,7 @@ TRANSLATIONS = {
         "help.numbering": "Das erste Raster beginnt bei LED 0. Jedes weitere Raster setzt nach dem vorherigen Tab fort; ziehe die Tabs, um die Reihenfolge zu ändern.",
         "help.corners": "Bitte klicke die 4 Eckpunkte in dieser Reihenfolge an:",
         "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
-        "help.selection": "Nach dem Berechnen kannst du Rasterpunkte anklicken, um sie abzuwählen oder wieder zu aktivieren. Klicke danach auf",
+        "help.selection": "Bei neuen oder geometrisch geänderten Rastern werden Positionen ohne CRUX-Griff in der Nähe automatisch abgewählt. Du kannst jeden Rasterpunkt anklicken, um ihn abzuwählen oder wieder zu aktivieren. Klicke danach auf",
         "help.save_selection": "Alle Raster speichern",
         "image.alt": "Kletterwand",
         "button.send": "Alle Raster speichern",
@@ -220,7 +220,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
         function createEmptyGrid() {
-            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
+            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: false, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
         }
         function normalizeGrid(grid, index) {
             return { ...createEmptyGrid(), ...grid, id: grid.id || `grid-${index + 1}`, points: grid.points || [], positions: grid.positions || null, position_led_ids: grid.position_led_ids || {}, position_hold_ids: grid.position_hold_ids || {}, excluded_position_ids: grid.excluded_position_ids || [] };
@@ -444,6 +444,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 if (grid.points.length !== 4 || !Number.isInteger(grid.r) || grid.r < 1 || !Number.isInteger(grid.c) || grid.c < 1) { alert(t('alert.incomplete_grid', { number: index + 1 })); return; }
                 if (grid.alternating && grid.c < 2) { alert(t('alert.alternating_columns')); return; }
                 const settings = gridSettingsFor(grid);
+                grid.auto_exclude_empty = !grid.positions || !grid.last_grid_settings || settings !== grid.last_grid_settings;
                 if (grid.last_grid_settings && settings !== grid.last_grid_settings) grid.excluded_position_ids = [];
                 if (grid.positions && grid.excluded_position_ids.length === Object.keys(grid.positions).length) { alert(t('alert.active_position')); return; }
             }
@@ -456,6 +457,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     p3x: grid.points[2].x, p3y: grid.points[2].y, p4x: grid.points[3].x, p4y: grid.points[3].y,
                     r: grid.r, c: grid.c, alternating: Boolean(grid.alternating), alternating_start_column: Number(grid.alternating_start_column || 0),
                     led_start_corner: grid.led_start_corner, led_direction: grid.led_direction, excluded_position_ids: grid.excluded_position_ids,
+                    auto_exclude_empty: Boolean(grid.auto_exclude_empty),
                 })),
             };
             try {

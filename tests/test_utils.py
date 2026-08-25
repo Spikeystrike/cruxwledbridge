@@ -516,6 +516,25 @@ class WallHoldKeyTests(unittest.TestCase):
 
 
 class GridGenerationTests(unittest.TestCase):
+    def test_nearby_hold_detection_uses_local_grid_spacing(self):
+        occupied = utils.positions_near_holds(
+            [
+                {"id": "near", "mask": [[4, 0], [4, 0]]},
+                {"id": "far", "mask": [[100, 0], [100, 0]]},
+            ],
+            [{0: (0, 0), 1: (10, 0), 2: (20, 0)}],
+        )
+
+        self.assertEqual(occupied, {(0, 0)})
+
+    def test_nearby_hold_is_assigned_to_only_one_of_multiple_grids(self):
+        occupied = utils.positions_near_holds(
+            [{"id": "hold", "mask": [[0, 0], [0, 0]]}],
+            [{0: (0, 0)}, {0: (1, 0)}],
+        )
+
+        self.assertEqual(occupied, {(0, 0)})
+
     def test_standard_grid_keeps_all_columns(self):
         grid = utils.generate_grid((0, 0), (30, 0), (30, 10), (0, 10), 2, 4)
 
@@ -1033,6 +1052,107 @@ class DefineHoldsTests(unittest.TestCase):
         self.assertEqual(saved_creation.settings["coordinate_height"], 10)
         db.close()
 
+    def test_new_grid_auto_excludes_empty_positions(self):
+        db = main.SessionLocal()
+        wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
+        wall.holds = [
+            {"id": "left-hold", "mask": [[0, 0], [0, 0]]},
+            {"id": "right-hold", "mask": [[20, 0], [20, 0]]},
+        ]
+        db.commit()
+        db.close()
+
+        payload = main.WallTranslation(
+            wallid=self.wall_id,
+            p1x=0,
+            p1y=0,
+            p2x=20,
+            p2y=0,
+            p3x=20,
+            p3y=10,
+            p4x=0,
+            p4y=10,
+            r=1,
+            c=3,
+            auto_exclude_empty=True,
+        )
+
+        result = asyncio.run(main.define_holds(payload))
+
+        self.assertEqual(result["excluded_position_ids"], [1])
+        self.assertEqual(result["position_led_ids"], {0: 0, 2: 1})
+        self.assertEqual(
+            result["holds2led"],
+            {"left-hold": 0, "right-hold": 1},
+        )
+
+    def test_fully_empty_grid_is_returned_for_manual_reactivation(self):
+        db = main.SessionLocal()
+        wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
+        wall.holds = []
+        db.commit()
+        db.close()
+
+        result = asyncio.run(main.define_holds(main.WallTranslation(
+            wallid=self.wall_id,
+            p1x=0,
+            p1y=0,
+            p2x=20,
+            p2y=0,
+            p3x=20,
+            p3y=10,
+            p4x=0,
+            p4y=10,
+            r=1,
+            c=2,
+            auto_exclude_empty=True,
+        )))
+
+        self.assertEqual(result["excluded_position_ids"], [0, 1])
+        self.assertEqual(result["position_led_ids"], {})
+        self.assertEqual(result["holds2led"], {})
+
+    def test_auto_excluded_position_can_be_manually_reactivated(self):
+        db = main.SessionLocal()
+        wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
+        wall.holds = [
+            {"id": "left-hold", "mask": [[0, 0], [0, 0]]},
+            {"id": "right-hold", "mask": [[20, 0], [20, 0]]},
+        ]
+        db.commit()
+        db.close()
+
+        base_payload = {
+            "wallid": self.wall_id,
+            "p1x": 0,
+            "p1y": 0,
+            "p2x": 20,
+            "p2y": 0,
+            "p3x": 20,
+            "p3y": 10,
+            "p4x": 0,
+            "p4y": 10,
+            "r": 1,
+            "c": 3,
+        }
+        asyncio.run(main.define_holds(main.WallTranslation(
+            **base_payload,
+            auto_exclude_empty=True,
+        )))
+
+        result = asyncio.run(main.define_holds(main.WallTranslation(
+            **base_payload,
+            excluded_position_ids=[],
+            auto_exclude_empty=False,
+        )))
+
+        self.assertEqual(result["excluded_position_ids"], [])
+        self.assertEqual(result["position_led_ids"], {0: 0, 1: 1, 2: 2})
+        self.assertEqual(
+            result["holds2led"],
+            {"left-hold": 0, "right-hold": 2},
+        )
+
     def test_hold_at_excluded_position_is_not_moved_to_active_position(self):
         db = main.SessionLocal()
         wall = db.query(main.WallDB).filter(main.WallDB.id == self.wall_id).one()
@@ -1502,6 +1622,25 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("excludedPositionIds.has(positionId)", html)
         self.assertIn("grid.excluded_position_ids = Array.from(excludedPositionIds)", html)
         self.assertIn("Alle Raster speichern", html)
+
+    def test_wall_selector_auto_excludes_only_new_or_changed_grids(self):
+        html = main.returnwallhtml(
+            {"id": 216943, "image_url": "https://example.com/wall.jpg"},
+            "/cruxwledbridge",
+        )
+
+        self.assertIn(
+            "grid.auto_exclude_empty = !grid.positions || !grid.last_grid_settings || settings !== grid.last_grid_settings",
+            html,
+        )
+        self.assertIn(
+            "auto_exclude_empty: Boolean(grid.auto_exclude_empty)",
+            html,
+        )
+        self.assertIn(
+            "Positionen ohne CRUX-Griff in der Nähe automatisch abgewählt",
+            html,
+        )
 
     def test_wall_selector_maps_display_pixels_to_original_image_pixels(self):
         html = main.returnwallhtml(

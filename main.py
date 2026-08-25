@@ -18,6 +18,7 @@ from utils import (
     ledCalculation,
     lightUpHoldId,
     playCelebrationEffect,
+    positions_near_holds,
     sendLightToBoulderwall,
     wall_hold_key,
 )
@@ -366,6 +367,7 @@ class GridTranslation(BaseModel):
     led_start_corner: str = "bottom_left"
     led_direction: str = "vertical"
     excluded_position_ids: List[int] = Field(default_factory=list)
+    auto_exclude_empty: bool = False
 
 
 class WallTranslation(GridTranslation):
@@ -690,7 +692,7 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
     combined_position_led_ids = {}
     combined_grid = {}
     saved_grids = []
-    led_offset = 0
+    prepared_grids = []
 
     for grid_index, grid_payload in enumerate(grid_payloads):
         points = [
@@ -734,12 +736,32 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
                 ),
             )
 
+        prepared_grids.append((grid_payload, full_grid, excluded_position_ids))
+        for position_id, coordinates in full_grid.items():
+            combined_positions[(grid_index, position_id)] = coordinates
+
+    occupied_positions = positions_near_holds(
+        existing_wall.holds,
+        [full_grid for _, full_grid, _ in prepared_grids],
+    )
+    led_offset = 0
+
+    for grid_index, (grid_payload, full_grid, excluded_position_ids) in enumerate(
+        prepared_grids
+    ):
+        if grid_payload.auto_exclude_empty:
+            excluded_position_ids.update(
+                position_id
+                for position_id in full_grid
+                if (grid_index, position_id) not in occupied_positions
+            )
+
         active_position_ids = [
             position_id
             for position_id in sorted(full_grid)
             if position_id not in excluded_position_ids
         ]
-        if not active_position_ids:
+        if not active_position_ids and not grid_payload.auto_exclude_empty:
             db.close()
             raise HTTPException(
                 status_code=400,
@@ -755,9 +777,8 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
             for position_id, led_id in position_led_ids.items()
         }
         combined_grid.update(grid)
-        for position_id, coordinates in full_grid.items():
+        for position_id in full_grid:
             combined_id = (grid_index, position_id)
-            combined_positions[combined_id] = coordinates
             if position_id in position_led_ids:
                 combined_position_led_ids[combined_id] = position_led_ids[position_id]
 
