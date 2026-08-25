@@ -220,10 +220,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
         function createEmptyGrid() {
-            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, excluded_position_ids: [], r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
+            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
         }
         function normalizeGrid(grid, index) {
-            return { ...createEmptyGrid(), ...grid, id: grid.id || `grid-${index + 1}`, points: grid.points || [], positions: grid.positions || null, position_led_ids: grid.position_led_ids || {}, excluded_position_ids: grid.excluded_position_ids || [] };
+            return { ...createEmptyGrid(), ...grid, id: grid.id || `grid-${index + 1}`, points: grid.points || [], positions: grid.positions || null, position_led_ids: grid.position_led_ids || {}, position_hold_ids: grid.position_hold_ids || {}, excluded_position_ids: grid.excluded_position_ids || [] };
         }
         const savedGrids = Array.isArray(savedCreation.grids) && savedCreation.grids.length ? savedCreation.grids : [savedCreation];
         let grids = savedGrids.map(normalizeGrid);
@@ -274,6 +274,20 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             grid.led_direction = ledDirectionSelect.value;
             grid.selection_dirty = selectionDirty;
             grid.last_grid_settings = lastGridSettings;
+        }
+        function bindHoldsToPositions() {
+            const holdByLedId = {};
+            for (const holdId in renderedHolds2led) {
+                const ledId = renderedHolds2led[holdId];
+                if (!holdByLedId[ledId]) holdByLedId[ledId] = holdId;
+            }
+            grids.forEach((grid) => {
+                grid.position_hold_ids = {};
+                for (const [positionId, ledId] of Object.entries(grid.position_led_ids || {})) {
+                    const holdId = holdByLedId[ledId];
+                    if (holdId) grid.position_hold_ids[positionId] = holdId;
+                }
+            });
         }
         function renumberGrids() {
             let offset = 0;
@@ -371,8 +385,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         function renderGrid() {
             document.querySelectorAll('.grid-point').forEach((point) => point.remove());
             if (!renderedPositions) return;
-            const led2holds = {};
-            for (const holdId in renderedHolds2led) { const ledId = renderedHolds2led[holdId]; if (!led2holds[ledId]) led2holds[ledId] = holdId; }
+            const positionHoldIds = grids[activeGridIndex].position_hold_ids || {};
             for (const positionIdText in renderedPositions) {
                 const [x, y] = renderedPositions[positionIdText];
                 const displayPoint = imageToDisplay({ x, y });
@@ -383,7 +396,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 const classes = ['grid-point'];
                 element.style.left = `${displayPoint.x}px`; element.style.top = `${displayPoint.y}px`; element.dataset.positionId = positionIdText;
                 if (excluded) { classes.push('excluded-point'); element.title = t('grid.excluded_title'); }
-                else if (led2holds[ledId]) { classes.push('hold-point'); element.title = t('grid.hold_title', { holdId: led2holds[ledId], ledId }); element.textContent = led2holds[ledId].substring(0, 4); }
+                else if (positionHoldIds[positionIdText]) { const holdId = positionHoldIds[positionIdText]; classes.push('hold-point'); element.title = t('grid.hold_title', { holdId, ledId }); element.textContent = holdId.substring(0, 4); }
                 else element.title = t('grid.led_title', { ledId });
                 element.className = classes.join(' ');
                 element.addEventListener('click', (event) => {
@@ -451,6 +464,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 if (!response.ok) throw new Error(result.detail || result.message || `HTTP ${response.status}`);
                 renderedHolds2led = result.holds2led || {};
                 grids = (result.grids || []).map((grid, index) => { const normalized = normalizeGrid(grid, index); normalized.last_grid_settings = gridSettingsFor(normalized); normalized.selection_dirty = false; return normalized; });
+                bindHoldsToPositions();
                 renumberGrids();
                 activeGridIndex = Math.max(0, grids.findIndex((grid) => grid.id === activeId));
                 activeGridLoaded = false; loadGrid(activeGridIndex); alert(t('alert.saved'));
@@ -460,7 +474,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             }
         });
         function initializeSavedCreation() {
-            normalizeSavedCreationCoordinates(); renumberGrids(); activeGridLoaded = false; loadGrid(0); savedCreationInitialized = true;
+            normalizeSavedCreationCoordinates(); bindHoldsToPositions(); renumberGrids(); activeGridLoaded = false; loadGrid(0); savedCreationInitialized = true;
         }
         if (climbingImage.complete && climbingImage.naturalWidth) initializeSavedCreation();
         else climbingImage.addEventListener('load', initializeSavedCreation, { once: true });

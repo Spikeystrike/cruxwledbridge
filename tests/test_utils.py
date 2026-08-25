@@ -1369,6 +1369,34 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("renderedPositions = null;", html)
         self.assertIn("excludedPositionIds.clear();", html)
 
+    def test_wall_selector_keeps_hold_labels_bound_to_grid_positions(self):
+        html = main.returnwallhtml(
+            {
+                "id": "wall-1",
+                "image_url": "https://example.com/wall.jpg",
+                "image_width": 100,
+                "image_height": 200,
+            },
+            saved_creation={
+                "holds2led": {"hold-a": 1},
+                "grids": [{
+                    "id": "grid-1",
+                    "positions": {"0": [0, 0], "1": [10, 0], "2": [20, 0]},
+                    "position_led_ids": {"0": 0, "1": 1, "2": 2},
+                    "excluded_position_ids": [],
+                }],
+            },
+        )
+
+        self.assertIn("function bindHoldsToPositions()", html)
+        self.assertIn("grid.position_hold_ids[positionId] = holdId", html)
+        self.assertIn(
+            "const positionHoldIds = grids[activeGridIndex].position_hold_ids || {}",
+            html,
+        )
+        self.assertIn("else if (positionHoldIds[positionIdText])", html)
+        self.assertNotIn("else if (led2holds[ledId])", html)
+
     def test_wall_selector_offers_led_cable_layout(self):
         html = main.returnwallhtml(
             {"id": 216943, "image_url": "https://example.com/wall.jpg"},
