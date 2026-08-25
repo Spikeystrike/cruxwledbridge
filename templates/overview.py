@@ -18,6 +18,9 @@ TRANSLATIONS = {
         "lighting.heading": "Wall lighting",
         "lighting.description": "Switch between dark and bright wall lighting and configure the celebration shown after a sent climb.",
         "lighting.open": "Open lighting settings",
+        "settings.heading": "Settings",
+        "settings.description": "Configure energy saving, including when an illuminated route switches off automatically.",
+        "settings.open": "Open settings",
     },
     "de": {
         "page.title": "CRUX WLED Bridge",
@@ -33,6 +36,9 @@ TRANSLATIONS = {
         "lighting.heading": "Wandbeleuchtung",
         "lighting.description": "Wechsle zwischen dunkler und heller Wandbeleuchtung und konfiguriere den Jubeleffekt nach einem Top.",
         "lighting.open": "Beleuchtungseinstellungen öffnen",
+        "settings.heading": "Einstellungen",
+        "settings.description": "Konfiguriere den Energiesparmodus und wann eine beleuchtete Route automatisch ausgeschaltet wird.",
+        "settings.open": "Einstellungen öffnen",
     },
 }
 
@@ -162,6 +168,11 @@ def return_overview_html(path_prefix=""):
                     <h2 data-i18n="lighting.heading">Wall lighting</h2>
                     <p data-i18n="lighting.description">Switch between dark and bright wall lighting and configure the celebration shown after a sent climb.</p>
                     <a class="button" href="{path_prefix}/wall_lighting" data-i18n="lighting.open">Open lighting settings</a>
+                </section>
+                <section class="card">
+                    <h2 data-i18n="settings.heading">Settings</h2>
+                    <p data-i18n="settings.description">Configure energy saving, including when an illuminated route switches off automatically.</p>
+                    <a class="button" href="{path_prefix}/settings" data-i18n="settings.open">Open settings</a>
                 </section>
             </div>
         </main>

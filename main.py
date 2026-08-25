@@ -30,6 +30,7 @@ from templates.wall_lighting import return_wall_lighting_html
 from templates.wallselector import returnwallhtml
 from templates.language import language_switch_html
 from templates.overview import return_overview_html
+from templates.settings import return_settings_html
 from config_loader import config
 Base = declarative_base()
 # SQLAlchemy Model for Wall
@@ -105,6 +106,7 @@ wall_lighting_mode = "dark"  # "dark" or "bright"
 bright_wall_brightness_percent = 20
 current_wall_holds = {}
 _pending_viewed_holds = None
+_route_lighting_active = False
 celebration_duration_seconds = float(
     getattr(config, "celebration_duration_seconds", 3.0)
 )
@@ -112,6 +114,9 @@ _lighting_state_lock = asyncio.Lock()
 _celebration_generation = 0
 _celebration_active = False
 _celebration_tasks = set()
+_route_timeout_generation = 0
+_route_timeout_task = None
+_route_timeout_sleep_task = None
 
 
 def load_celebration_effect():
@@ -149,17 +154,125 @@ def persist_celebration_effect(effect):
 celebration_effect = load_celebration_effect()
 
 
+def load_route_timeout_minutes():
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettingDB).filter(
+            AppSettingDB.key == "route_timeout_minutes"
+        ).first()
+        value = setting.value if setting else 0
+        if isinstance(value, bool):
+            return 0
+        value = int(value)
+        return value if value >= 0 else 0
+    except (TypeError, ValueError):
+        return 0
+    finally:
+        db.close()
+
+
+def persist_route_timeout_minutes(minutes):
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettingDB).filter(
+            AppSettingDB.key == "route_timeout_minutes"
+        ).first()
+        if setting:
+            setting.value = int(minutes)
+        else:
+            db.add(AppSettingDB(
+                key="route_timeout_minutes",
+                value=int(minutes),
+            ))
+        db.commit()
+    finally:
+        db.close()
+
+
+route_timeout_minutes = load_route_timeout_minutes()
+
+
+def _cancel_route_timeout():
+    global _route_timeout_generation, _route_timeout_task
+    _route_timeout_generation += 1
+    if (
+        _route_timeout_task is not None
+        and _route_timeout_task is _route_timeout_sleep_task
+        and not _route_timeout_task.done()
+    ):
+        _route_timeout_task.cancel()
+    _route_timeout_task = None
+
+
+def _clear_route_timeout_task(task):
+    global _route_timeout_task, _route_timeout_sleep_task
+    if _route_timeout_task is task:
+        _route_timeout_task = None
+    if _route_timeout_sleep_task is task:
+        _route_timeout_sleep_task = None
+
+
+async def _run_route_timeout(delay_seconds, generation):
+    global _route_lighting_active, _route_timeout_sleep_task
+    task = asyncio.current_task()
+    try:
+        _route_timeout_sleep_task = task
+        await asyncio.sleep(delay_seconds)
+        if _route_timeout_sleep_task is task:
+            _route_timeout_sleep_task = None
+        async with _lighting_state_lock:
+            if generation != _route_timeout_generation:
+                return
+            _route_lighting_active = False
+            await asyncio.to_thread(
+                sendLightToBoulderwall,
+                {},
+                "dark",
+                bright_wall_brightness_percent,
+            )
+    except asyncio.CancelledError:
+        return
+    finally:
+        if _route_timeout_sleep_task is task:
+            _route_timeout_sleep_task = None
+
+
+def schedule_route_timeout():
+    global _route_timeout_generation, _route_timeout_task
+    _cancel_route_timeout()
+    if route_timeout_minutes == 0:
+        return False
+
+    generation = _route_timeout_generation
+    task = asyncio.create_task(
+        _run_route_timeout(route_timeout_minutes * 60, generation)
+    )
+    _route_timeout_task = task
+    task.add_done_callback(_clear_route_timeout_task)
+    return True
+
+
 async def _restore_current_wall():
-    global current_wall_holds, _pending_viewed_holds
+    global current_wall_holds, _pending_viewed_holds, _route_lighting_active
     if _pending_viewed_holds is not None:
         current_wall_holds = _pending_viewed_holds
         _pending_viewed_holds = None
-    await asyncio.to_thread(
-        sendLightToBoulderwall,
-        dict(current_wall_holds),
-        wall_lighting_mode,
-        bright_wall_brightness_percent,
-    )
+        _route_lighting_active = True
+    if _route_lighting_active:
+        await asyncio.to_thread(
+            sendLightToBoulderwall,
+            dict(current_wall_holds),
+            wall_lighting_mode,
+            bright_wall_brightness_percent,
+        )
+        schedule_route_timeout()
+    else:
+        await asyncio.to_thread(
+            sendLightToBoulderwall,
+            {},
+            "dark",
+            bright_wall_brightness_percent,
+        )
 
 
 async def _run_celebration(effect, generation):
@@ -193,6 +306,7 @@ def schedule_celebration():
         return False
 
     _celebration_generation += 1
+    _cancel_route_timeout()
     generation = _celebration_generation
     _celebration_active = True
     task = asyncio.create_task(_run_celebration(celebration_effect, generation))
@@ -315,6 +429,10 @@ class WallLightingMode(BaseModel):
 class CelebrationEffectSelection(BaseModel):
     effect: str
 
+
+class EnergySavingSettings(BaseModel):
+    route_timeout_minutes: int = Field(ge=0)
+
 class Hold(BaseModel):
     id: str
     hold_type: str
@@ -428,7 +546,7 @@ async def root():
 
 @app.post("/viewed")
 async def viewed(payload: PayL, request: Request):
-    global current_wall_holds, _pending_viewed_holds
+    global current_wall_holds, _pending_viewed_holds, _route_lighting_active
     # Verarbeite den JSON-Payload
     climb = payload.payload
     request.state.viewed_climb = {
@@ -450,6 +568,8 @@ async def viewed(payload: PayL, request: Request):
                 # events arrive, the most recent one is what should be shown
                 # once the celebration has finished.
                 _pending_viewed_holds = dict(holds)
+                _route_lighting_active = True
+                _cancel_route_timeout()
             else:
                 current_wall_holds = dict(holds)
                 _pending_viewed_holds = None
@@ -459,6 +579,8 @@ async def viewed(payload: PayL, request: Request):
                     wall_lighting_mode,
                     bright_wall_brightness_percent,
                 )
+                _route_lighting_active = True
+                schedule_route_timeout()
         db.close()
     except Exception as e:
         print("ERROR")
@@ -529,6 +651,30 @@ async def get_wall_lighting():
         bright_wall_brightness_percent,
     )
     return HTMLResponse(content=html_content)
+
+
+@app.post("/route_timeout")
+async def set_route_timeout(payload: EnergySavingSettings):
+    global route_timeout_minutes
+    route_timeout_minutes = payload.route_timeout_minutes
+    persist_route_timeout_minutes(route_timeout_minutes)
+    async with _lighting_state_lock:
+        if _route_lighting_active and not _celebration_active:
+            schedule_route_timeout()
+        else:
+            _cancel_route_timeout()
+    return {
+        "message": "Route timeout updated",
+        "route_timeout_minutes": route_timeout_minutes,
+    }
+
+
+@app.get("/settings", response_class=HTMLResponse)
+async def get_settings():
+    return HTMLResponse(content=return_settings_html(
+        APP_PATH_PREFIX,
+        route_timeout_minutes,
+    ))
 
 @app.get("/lightID/{color}/{led_id}")
 async def get_light_id(color: str, led_id: int):

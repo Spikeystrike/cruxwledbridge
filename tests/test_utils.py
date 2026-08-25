@@ -273,9 +273,15 @@ class AccessLoggingTests(unittest.TestCase):
             'climb_id=321 climb_name="Blue \\"Moon\\"" wall_id=44 200 OK',
         )
 
+    @patch("main.schedule_route_timeout")
     @patch("main.sendLightToBoulderwall")
     @patch("main.SessionLocal")
-    def test_viewed_handler_adds_climb_context(self, session_local, send_lights):
+    def test_viewed_handler_adds_climb_context(
+        self,
+        session_local,
+        send_lights,
+        schedule_timeout,
+    ):
         request = self.make_request()
         payload = main.PayL(
             payload=main.Climb(
@@ -312,6 +318,7 @@ class AccessLoggingTests(unittest.TestCase):
             {"id": 321, "name": "Blue Moon", "wall_id": 44},
         )
         send_lights.assert_called_once_with({}, "dark", 20)
+        schedule_timeout.assert_called_once_with()
         session_local.return_value.close.assert_called_once_with()
 
 
@@ -325,6 +332,10 @@ class CelebrationTests(unittest.TestCase):
         self.original_brightness = main.bright_wall_brightness_percent
         self.original_generation = main._celebration_generation
         self.original_active = main._celebration_active
+        self.original_route_active = main._route_lighting_active
+        self.original_route_generation = main._route_timeout_generation
+        self.original_route_task = main._route_timeout_task
+        self.original_route_sleep_task = main._route_timeout_sleep_task
 
     def tearDown(self):
         main.celebration_effect = self.original_effect
@@ -335,6 +346,10 @@ class CelebrationTests(unittest.TestCase):
         main.bright_wall_brightness_percent = self.original_brightness
         main._celebration_generation = self.original_generation
         main._celebration_active = self.original_active
+        main._route_lighting_active = self.original_route_active
+        main._route_timeout_generation = self.original_route_generation
+        main._route_timeout_task = self.original_route_task
+        main._route_timeout_sleep_task = self.original_route_sleep_task
 
     @patch("main.schedule_celebration", return_value=True)
     def test_climb_sent_webhook_accepts_full_send_and_starts_effect(self, schedule):
@@ -403,9 +418,15 @@ class CelebrationTests(unittest.TestCase):
             db.commit()
             db.close()
 
+    @patch("main.schedule_route_timeout")
     @patch("main.sendLightToBoulderwall")
     @patch("main.playCelebrationEffect")
-    def test_celebration_restores_latest_wall_state(self, play_effect, send_lights):
+    def test_celebration_restores_latest_wall_state(
+        self,
+        play_effect,
+        send_lights,
+        schedule_timeout,
+    ):
         main.celebration_duration_seconds = 0
         main.current_wall_holds = {2: "start"}
         main._pending_viewed_holds = {1: "finish"}
@@ -418,6 +439,7 @@ class CelebrationTests(unittest.TestCase):
 
         play_effect.assert_called_once_with("rainbow")
         send_lights.assert_called_once_with({1: "finish"}, "bright", 65)
+        schedule_timeout.assert_called_once_with()
         self.assertEqual(main.current_wall_holds, {1: "finish"})
         self.assertIsNone(main._pending_viewed_holds)
         self.assertFalse(main._celebration_active)
@@ -505,6 +527,111 @@ class CelebrationTests(unittest.TestCase):
         )
         self.assertEqual(main.celebration_effect, "off")
         self.assertEqual(result["effect"], "off")
+
+
+class EnergySavingTests(unittest.TestCase):
+    def setUp(self):
+        self.original_minutes = main.route_timeout_minutes
+        self.original_generation = main._route_timeout_generation
+        self.original_task = main._route_timeout_task
+        self.original_sleep_task = main._route_timeout_sleep_task
+        self.original_active = main._route_lighting_active
+        self.original_celebration_active = main._celebration_active
+        main._route_timeout_task = None
+        main._route_timeout_sleep_task = None
+        main._route_timeout_generation = 0
+        main._route_lighting_active = False
+        main._celebration_active = False
+
+    def tearDown(self):
+        main._cancel_route_timeout()
+        main.route_timeout_minutes = self.original_minutes
+        main._route_timeout_generation = self.original_generation
+        main._route_timeout_task = self.original_task
+        main._route_timeout_sleep_task = self.original_sleep_task
+        main._route_lighting_active = self.original_active
+        main._celebration_active = self.original_celebration_active
+
+    def test_route_timeout_is_persisted_in_database(self):
+        db = main.SessionLocal()
+        previous = db.query(main.AppSettingDB).filter(
+            main.AppSettingDB.key == "route_timeout_minutes"
+        ).first()
+        previous_value = previous.value if previous else None
+        db.close()
+
+        try:
+            main.persist_route_timeout_minutes(17)
+            self.assertEqual(main.load_route_timeout_minutes(), 17)
+        finally:
+            db = main.SessionLocal()
+            setting = db.query(main.AppSettingDB).filter(
+                main.AppSettingDB.key == "route_timeout_minutes"
+            ).first()
+            if previous_value is None:
+                if setting:
+                    db.delete(setting)
+            elif setting:
+                setting.value = previous_value
+            else:
+                db.add(main.AppSettingDB(
+                    key="route_timeout_minutes",
+                    value=previous_value,
+                ))
+            db.commit()
+            db.close()
+
+    @patch("main.schedule_route_timeout", return_value=True)
+    @patch("main.persist_route_timeout_minutes")
+    def test_setting_timeout_updates_state_and_restarts_active_route(
+        self,
+        persist,
+        schedule_timeout,
+    ):
+        main._route_lighting_active = True
+
+        result = asyncio.run(main.set_route_timeout(
+            main.EnergySavingSettings(route_timeout_minutes=15)
+        ))
+
+        self.assertEqual(main.route_timeout_minutes, 15)
+        self.assertEqual(result["route_timeout_minutes"], 15)
+        persist.assert_called_once_with(15)
+        schedule_timeout.assert_called_once_with()
+
+    def test_negative_timeout_is_rejected(self):
+        with self.assertRaises(ValueError):
+            main.EnergySavingSettings(route_timeout_minutes=-1)
+
+    def test_zero_disables_automatic_switch_off(self):
+        main.route_timeout_minutes = 0
+
+        async def schedule():
+            return main.schedule_route_timeout()
+
+        self.assertFalse(asyncio.run(schedule()))
+        self.assertIsNone(main._route_timeout_task)
+
+    @patch("main.sendLightToBoulderwall")
+    def test_expired_timeout_switches_route_off(self, send_lights):
+        main._route_timeout_generation = 7
+        main._route_lighting_active = True
+        main.bright_wall_brightness_percent = 65
+
+        asyncio.run(main._run_route_timeout(0, 7))
+
+        send_lights.assert_called_once_with({}, "dark", 65)
+        self.assertFalse(main._route_lighting_active)
+
+    @patch("main.sendLightToBoulderwall")
+    def test_outdated_timeout_cannot_switch_newer_route_off(self, send_lights):
+        main._route_timeout_generation = 8
+        main._route_lighting_active = True
+
+        asyncio.run(main._run_route_timeout(0, 7))
+
+        send_lights.assert_not_called()
+        self.assertTrue(main._route_lighting_active)
 
 
 class WallHoldKeyTests(unittest.TestCase):
@@ -1402,8 +1529,10 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn('action="/cruxwledbridge/listwalls"', html)
         self.assertIn('name="gym"', html)
         self.assertIn('href="/cruxwledbridge/wall_lighting"', html)
+        self.assertIn('href="/cruxwledbridge/settings"', html)
         self.assertIn("map its holds to the physical LEDs", html)
         self.assertIn("configure the celebration", html)
+        self.assertIn("Configure energy saving", html)
 
     def test_overview_is_localized(self):
         html = main.return_overview_html()
@@ -1414,6 +1543,16 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("Wand einrichten", html)
         self.assertIn("Wall lighting", html)
         self.assertIn("Wandbeleuchtung", html)
+        self.assertIn("Energy saving", main.return_settings_html())
+        self.assertIn("Energiesparmodus", main.return_settings_html())
+
+    def test_settings_page_uses_path_prefix_and_current_timeout(self):
+        html = main.return_settings_html("/cruxwledbridge", 15)
+
+        self.assertIn("fetch('/cruxwledbridge/route_timeout'", html)
+        self.assertIn('type="number" min="0" step="1" value="15"', html)
+        self.assertIn("Mit 0 bleibt die Route an", html)
+        self.assertIn("route_timeout_minutes: Number(timeoutInput.value)", html)
 
     def test_overview_shows_and_removes_saved_gym_favorite(self):
         html = main.return_overview_html("/cruxwledbridge")
@@ -1440,6 +1579,8 @@ class PathPrefixTests(unittest.TestCase):
         self.assertTrue(any(path == "/wall_lighting_mode" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/celebration_effect" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/sent" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/settings" and "GET" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/route_timeout" and "POST" in methods for path, methods in routes))
         self.assertFalse(any(path in {"/toggle_gui", "/toggle_mode"} for path, _ in routes))
 
     def test_wall_lighting_mode_updates_server_state(self):
