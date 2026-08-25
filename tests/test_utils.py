@@ -522,6 +522,36 @@ class GridGenerationTests(unittest.TestCase):
         self.assertEqual(len(grid), 8)
         self.assertEqual(set(grid), set(range(8)))
 
+    def test_perspective_grid_uses_projective_row_spacing(self):
+        grid = utils.generate_grid(
+            (0, 0),
+            (100, 0),
+            (80, 100),
+            (20, 100),
+            3,
+            3,
+            led_start_corner="top_left",
+            led_direction="horizontal",
+        )
+
+        self.assertEqual(grid[0], (0, 0))
+        self.assertEqual(grid[2], (100, 0))
+        self.assertEqual(grid[4], (50, 62))
+        self.assertEqual(grid[6], (20, 100))
+        self.assertEqual(grid[8], (80, 100))
+        self.assertNotEqual(grid[4][1], 50)
+
+    def test_rejects_degenerate_grid_corners(self):
+        with self.assertRaisesRegex(ValueError, "non-degenerate quadrilateral"):
+            utils.generate_grid(
+                (0, 0),
+                (10, 0),
+                (20, 0),
+                (30, 0),
+                3,
+                3,
+            )
+
     def test_alternating_grid_uses_half_the_columns_per_row(self):
         grid = utils.generate_grid(
             (5, 0),

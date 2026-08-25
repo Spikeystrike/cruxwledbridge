@@ -52,6 +52,39 @@ def _turn_off(controller):
     )
 
 
+def _grid_homography(lu, ru, rb, lb):
+    """Map a normalized rectangle onto the four selected image points."""
+    source_points = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    destination_points = np.asarray((lu, ru, rb, lb), dtype=float)
+    if destination_points.shape != (4, 2) or not np.isfinite(destination_points).all():
+        raise ValueError("Grid corners must contain four finite x/y coordinates")
+
+    equations = []
+    targets = []
+    for (s, t), (x, y) in zip(source_points, destination_points):
+        equations.append((s, t, 1.0, 0.0, 0.0, 0.0, -s * x, -t * x))
+        targets.append(x)
+        equations.append((0.0, 0.0, 0.0, s, t, 1.0, -s * y, -t * y))
+        targets.append(y)
+
+    coefficients = np.linalg.solve(
+        np.asarray(equations, dtype=float),
+        np.asarray(targets, dtype=float),
+    )
+    transform = np.append(coefficients, 1.0).reshape(3, 3)
+    if np.linalg.matrix_rank(transform) < 3:
+        raise ValueError("Grid corners must define a non-degenerate quadrilateral")
+    return transform
+
+
+def _project_grid_point(transform, s, t):
+    projected = transform @ np.asarray((s, t, 1.0), dtype=float)
+    if np.isclose(projected[2], 0.0):
+        raise ValueError("Grid corners produce a point at infinity")
+    point = np.rint(projected[:2] / projected[2]).astype(int)
+    return point[0].item(), point[1].item()
+
+
 def generate_grid(
     lu,
     ru,
@@ -83,25 +116,24 @@ def generate_grid(
         else:
             row_columns.append(list(range(c)))
 
+    try:
+        transform = _grid_homography(lu, ru, rb, lb)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(
+            "Grid corners must define a non-degenerate quadrilateral"
+        ) from exc
+
     positions = {}
-    # Interpolate die Positionen für alle Reihen (von links oben nach links unten und rechts oben nach rechts unten)
     for i in range(r):
-        # Division durch Null vermeiden, wenn es nur eine Reihe gibt
         t = i / (r - 1) if r > 1 else 0.0
-        left_point = (1 - t) * np.array(lu) + t * np.array(lb)  # Position entlang der linken Seite
-        right_point = (1 - t) * np.array(ru) + t * np.array(rb)  # Position entlang der rechten Seite
 
         # Im alternierenden Raster wechseln die verwendeten Spalten je Reihe.
         # Bei ungeradem C darf sich deshalb die Anzahl aktiver Punkte je Reihe
         # um eins unterscheiden.
         column_indices = row_columns[i]
-        # Interpolate die Punkte innerhalb der aktuellen Reihe (von links nach rechts)
         for j in column_indices:
-            # Division durch Null vermeiden, wenn es nur eine Spalte gibt
             s = j / (c - 1) if c > 1 else 0.0
-            point = np.rint((1 - s) * left_point + s * right_point).astype(int)  # Position entlang der aktuellen Zeile
-
-            positions[(i, j)] = (point[0].item(), point[1].item())
+            positions[(i, j)] = _project_grid_point(transform, s, t)
 
     starts_top = led_start_corner.startswith("top_")
     starts_left = led_start_corner.endswith("_left")
