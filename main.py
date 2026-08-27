@@ -15,6 +15,7 @@ import json
 from utils import (
     CELEBRATION_EFFECTS,
     generate_grid,
+    generate_grid_position_layout,
     ledCalculation,
     lightUpHoldId,
     playCelebrationEffect,
@@ -102,6 +103,8 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
+HOLD_LIGHTING_DIRECTIONS = {"below", "above", "both"}
+
 
 def load_app_setting(key, default=None):
     """Load one JSON-compatible setting from the shared settings store."""
@@ -146,6 +149,11 @@ def load_wall_lighting_mode():
     return mode if mode in {"dark", "bright"} else "dark"
 
 
+def load_hold_lighting_direction():
+    direction = load_app_setting("hold_lighting_direction", "below")
+    return direction if direction in HOLD_LIGHTING_DIRECTIONS else "below"
+
+
 def load_celebration_effect():
     default_effect = getattr(config, "celebration_effect", "rainbow")
     if default_effect not in {"off", *CELEBRATION_EFFECTS}:
@@ -174,6 +182,123 @@ def persist_route_timeout_minutes(minutes):
     persist_app_settings({"route_timeout_minutes": int(minutes)})
 
 
+def _above_led_mapping(saved_settings):
+    """Map each logical hold LED to the LED directly above it."""
+    if not isinstance(saved_settings, dict):
+        return {}
+
+    saved_grids = saved_settings.get("grids")
+    if not isinstance(saved_grids, list) or not saved_grids:
+        saved_grids = [saved_settings]
+
+    above_leds = {}
+    for saved_grid in saved_grids:
+        if not isinstance(saved_grid, dict):
+            continue
+        raw_position_led_ids = saved_grid.get("position_led_ids", {})
+        if not isinstance(raw_position_led_ids, dict):
+            continue
+        try:
+            layout = generate_grid_position_layout(
+                int(saved_grid["r"]),
+                int(saved_grid["c"]),
+                alternating=bool(saved_grid.get("alternating", False)),
+                alternating_start_column=int(
+                    saved_grid.get("alternating_start_column", 0)
+                ),
+                led_start_corner=saved_grid.get(
+                    "led_start_corner",
+                    "bottom_left",
+                ),
+                led_direction=saved_grid.get("led_direction", "vertical"),
+            )
+            position_led_ids = {
+                int(position_id): int(led_id)
+                for position_id, led_id
+                in raw_position_led_ids.items()
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        raw_positions = saved_grid.get("positions", {})
+        if not isinstance(raw_positions, dict):
+            raw_positions = {}
+        positions = {}
+        for position_id, coordinates in raw_positions.items():
+            try:
+                x, y = coordinates
+                positions[int(position_id)] = (float(x), float(y))
+            except (TypeError, ValueError):
+                continue
+
+        active_positions = set(position_led_ids).intersection(layout)
+        for position_id in active_positions:
+            led_id = position_led_ids[position_id]
+            row, column = layout[position_id]
+            candidates = [
+                candidate_id
+                for candidate_id in active_positions
+                if layout[candidate_id][0] == row - 1
+            ]
+            if not candidates:
+                # No LED exists above the highest active hold. Its own LED is
+                # below the hold and is therefore the required fallback.
+                above_leds[led_id] = (led_id, True)
+                continue
+
+            source_coordinates = positions.get(position_id)
+
+            def candidate_distance(candidate_id):
+                candidate_coordinates = positions.get(candidate_id)
+                candidate_column = layout[candidate_id][1]
+                if source_coordinates and candidate_coordinates:
+                    x_distance = source_coordinates[0] - candidate_coordinates[0]
+                    y_distance = source_coordinates[1] - candidate_coordinates[1]
+                    image_distance = x_distance ** 2 + y_distance ** 2
+                else:
+                    image_distance = abs(column - candidate_column)
+                return image_distance, abs(column - candidate_column), candidate_id
+
+            target_position_id = min(candidates, key=candidate_distance)
+            above_leds[led_id] = (
+                position_led_ids[target_position_id],
+                False,
+            )
+
+    return above_leds
+
+
+def apply_hold_lighting_direction(holds, saved_settings, direction):
+    """Move or duplicate route colors to the LEDs above their holds."""
+    holds = dict(holds)
+    if direction == "below" or not holds:
+        return holds
+    if direction not in HOLD_LIGHTING_DIRECTIONS:
+        return holds
+
+    above_leds = _above_led_mapping(saved_settings)
+    shifted_holds = {}
+    fallback_holds = {}
+    for led_id, hold_type in sorted(holds.items()):
+        target_led_id, uses_below_fallback = above_leds.get(
+            led_id,
+            (led_id, True),
+        )
+        target = fallback_holds if uses_below_fallback else shifted_holds
+        target[target_led_id] = hold_type
+
+    # A highest hold's required below-light fallback wins if a lower hold also
+    # tries to use that LED from above.
+    shifted_holds.update(fallback_holds)
+    if direction == "above":
+        return shifted_holds
+
+    # In both-sides mode the LED assigned directly to a hold keeps that hold's
+    # own color when two adjacent route holds share the same physical light.
+    shifted_holds.update(holds)
+    return shifted_holds
+
+
 wall_lighting_mode = load_wall_lighting_mode()
 bright_wall_brightness_percent = _load_percent_setting(
     "bright_wall_brightness_percent",
@@ -183,6 +308,7 @@ boulder_brightness_percent = _load_percent_setting(
     "boulder_brightness_percent",
     100,
 )
+hold_lighting_direction = load_hold_lighting_direction()
 celebration_effect = load_celebration_effect()
 route_timeout_minutes = load_route_timeout_minutes()
 current_wall_holds = {}
@@ -446,6 +572,7 @@ class WallLightingSettings(BaseModel):
     bright_brightness_percent: int = Field(ge=10, le=100)
     boulder_brightness_percent: int = Field(ge=10, le=100)
     celebration_effect: str
+    hold_lighting_direction: Optional[str] = None
 
 
 class EnergySavingSettings(BaseModel):
@@ -581,6 +708,14 @@ async def viewed(payload: PayL, request: Request):
             hit = db.query(Hold2ledDB).filter(Hold2ledDB.holdid == hold_key).first()
             if hit:
                 holds[hit.ledid] = hold.hold_type
+        saved_creation = db.query(WallCreationDB).filter(
+            WallCreationDB.wallid == climb.wall_id
+        ).first()
+        holds = apply_hold_lighting_direction(
+            holds,
+            saved_creation.settings if saved_creation else None,
+            hold_lighting_direction,
+        )
         async with _lighting_state_lock:
             if _celebration_active:
                 # Keep the running celebration untouched. If several viewed
@@ -649,7 +784,7 @@ async def set_wall_lighting_mode(payload: WallLightingMode):
 @app.post("/wall_lighting_settings")
 async def set_wall_lighting_settings(payload: WallLightingSettings):
     global wall_lighting_mode, bright_wall_brightness_percent
-    global boulder_brightness_percent, celebration_effect
+    global boulder_brightness_percent, celebration_effect, hold_lighting_direction
     global _celebration_active, _celebration_generation
 
     if payload.mode not in {"dark", "bright"}:
@@ -662,17 +797,27 @@ async def set_wall_lighting_settings(payload: WallLightingSettings):
             status_code=400,
             content={"message": "Invalid celebration effect."},
         )
+    new_hold_lighting_direction = (
+        payload.hold_lighting_direction or hold_lighting_direction
+    )
+    if new_hold_lighting_direction not in HOLD_LIGHTING_DIRECTIONS:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Invalid hold lighting direction."},
+        )
 
     persist_app_settings({
         "wall_lighting_mode": payload.mode,
         "bright_wall_brightness_percent": payload.bright_brightness_percent,
         "boulder_brightness_percent": payload.boulder_brightness_percent,
         "celebration_effect": payload.celebration_effect,
+        "hold_lighting_direction": new_hold_lighting_direction,
     })
     wall_lighting_mode = payload.mode
     bright_wall_brightness_percent = payload.bright_brightness_percent
     boulder_brightness_percent = payload.boulder_brightness_percent
     celebration_effect = payload.celebration_effect
+    hold_lighting_direction = new_hold_lighting_direction
 
     if celebration_effect == "off" and _celebration_active:
         _celebration_generation += 1
@@ -686,6 +831,7 @@ async def set_wall_lighting_settings(payload: WallLightingSettings):
         "bright_brightness_percent": bright_wall_brightness_percent,
         "boulder_brightness_percent": boulder_brightness_percent,
         "celebration_effect": celebration_effect,
+        "hold_lighting_direction": hold_lighting_direction,
     }
 
 
@@ -718,6 +864,7 @@ async def get_wall_lighting():
         bright_wall_brightness_percent,
         wall_lighting_mode,
         boulder_brightness_percent,
+        hold_lighting_direction,
     )
     return HTMLResponse(content=html_content)
 

@@ -85,17 +85,13 @@ def _project_grid_point(transform, s, t):
     return point[0].item(), point[1].item()
 
 
-def generate_grid(
-    lu,
-    ru,
-    rb,
-    lb,
+def _validate_grid_layout(
     r,
     c,
-    alternating=False,
-    alternating_start_column=0,
-    led_start_corner="bottom_left",
-    led_direction="vertical",
+    alternating,
+    alternating_start_column,
+    led_start_corner,
+    led_direction,
 ):
     if r < 1 or c < 1:
         raise ValueError("Grid rows and columns must be positive")
@@ -108,6 +104,8 @@ def generate_grid(
     if led_direction not in {"horizontal", "vertical"}:
         raise ValueError("LED direction must be horizontal or vertical")
 
+
+def _grid_row_columns(r, c, alternating, alternating_start_column):
     row_columns = []
     for row_from_top in range(r):
         if alternating:
@@ -115,6 +113,90 @@ def generate_grid(
             row_columns.append(list(range(first_column, c, 2)))
         else:
             row_columns.append(list(range(c)))
+    return row_columns
+
+
+def _grid_cable_order(positions, led_start_corner, led_direction):
+    positions = set(positions)
+    starts_top = led_start_corner.startswith("top_")
+    starts_left = led_start_corner.endswith("_left")
+
+    if led_direction == "horizontal":
+        stripes = sorted({row for row, _ in positions}, reverse=not starts_top)
+        stripe_positions = lambda stripe: [
+            (row, column) for row, column in positions if row == stripe
+        ]
+        first_run_ascending = starts_left
+        sort_axis = lambda position: position[1]
+    else:
+        stripes = sorted({column for _, column in positions}, reverse=not starts_left)
+        stripe_positions = lambda stripe: [
+            (row, column) for row, column in positions if column == stripe
+        ]
+        first_run_ascending = starts_top
+        sort_axis = lambda position: position[0]
+
+    cable_order = []
+    for stripe_index, stripe in enumerate(stripes):
+        ascending = first_run_ascending if stripe_index % 2 == 0 else not first_run_ascending
+        cable_order.extend(
+            sorted(stripe_positions(stripe), key=sort_axis, reverse=not ascending)
+        )
+    return cable_order
+
+
+def generate_grid_position_layout(
+    r,
+    c,
+    alternating=False,
+    alternating_start_column=0,
+    led_start_corner="bottom_left",
+    led_direction="vertical",
+):
+    """Return each cable-order position ID's structural row and column."""
+    _validate_grid_layout(
+        r,
+        c,
+        alternating,
+        alternating_start_column,
+        led_start_corner,
+        led_direction,
+    )
+    row_columns = _grid_row_columns(r, c, alternating, alternating_start_column)
+    positions = {
+        (row, column)
+        for row, columns in enumerate(row_columns)
+        for column in columns
+    }
+    return {
+        position_id: position
+        for position_id, position in enumerate(
+            _grid_cable_order(positions, led_start_corner, led_direction)
+        )
+    }
+
+
+def generate_grid(
+    lu,
+    ru,
+    rb,
+    lb,
+    r,
+    c,
+    alternating=False,
+    alternating_start_column=0,
+    led_start_corner="bottom_left",
+    led_direction="vertical",
+):
+    _validate_grid_layout(
+        r,
+        c,
+        alternating,
+        alternating_start_column,
+        led_start_corner,
+        led_direction,
+    )
+    row_columns = _grid_row_columns(r, c, alternating, alternating_start_column)
 
     try:
         transform = _grid_homography(lu, ru, rb, lb)
@@ -135,29 +217,14 @@ def generate_grid(
             s = j / (c - 1) if c > 1 else 0.0
             positions[(i, j)] = _project_grid_point(transform, s, t)
 
-    starts_top = led_start_corner.startswith("top_")
-    starts_left = led_start_corner.endswith("_left")
-
     # Sort the logical positions in physical cable order. The direction selects
     # whether the cable snakes through rows or columns; the chosen corner fixes
     # both LED 0 and the direction of the first run.
-    if led_direction == "horizontal":
-        stripes = sorted({row for row, _ in positions}, reverse=not starts_top)
-        stripe_positions = lambda stripe: [(row, column) for row, column in positions if row == stripe]
-        first_run_ascending = starts_left
-        sort_axis = lambda position: position[1]
-    else:
-        stripes = sorted({column for _, column in positions}, reverse=not starts_left)
-        stripe_positions = lambda stripe: [(row, column) for row, column in positions if column == stripe]
-        first_run_ascending = starts_top
-        sort_axis = lambda position: position[0]
-
-    cable_order = []
-    for stripe_index, stripe in enumerate(stripes):
-        ascending = first_run_ascending if stripe_index % 2 == 0 else not first_run_ascending
-        cable_order.extend(
-            sorted(stripe_positions(stripe), key=sort_axis, reverse=not ascending)
-        )
+    cable_order = _grid_cable_order(
+        positions,
+        led_start_corner,
+        led_direction,
+    )
 
     grid = {
         led_id: positions[position]

@@ -329,6 +329,7 @@ class AppSettingsTests(unittest.TestCase):
         "wall_lighting_mode",
         "bright_wall_brightness_percent",
         "boulder_brightness_percent",
+        "hold_lighting_direction",
         "celebration_effect",
     )
 
@@ -357,6 +358,7 @@ class AppSettingsTests(unittest.TestCase):
             "wall_lighting_mode": "bright",
             "bright_wall_brightness_percent": 73,
             "boulder_brightness_percent": 42,
+            "hold_lighting_direction": "both",
         }
         with patch(
             "main.load_app_setting",
@@ -371,12 +373,14 @@ class AppSettingsTests(unittest.TestCase):
                 main._load_percent_setting("boulder_brightness_percent", 100),
                 42,
             )
+            self.assertEqual(main.load_hold_lighting_direction(), "both")
 
     def test_wall_lighting_settings_survive_database_reload(self):
         main.persist_app_settings({
             "wall_lighting_mode": "bright",
             "bright_wall_brightness_percent": 34,
             "boulder_brightness_percent": 76,
+            "hold_lighting_direction": "above",
             "celebration_effect": "fireworks",
         })
 
@@ -389,7 +393,12 @@ class AppSettingsTests(unittest.TestCase):
             main._load_percent_setting("boulder_brightness_percent", 100),
             76,
         )
+        self.assertEqual(main.load_hold_lighting_direction(), "above")
         self.assertEqual(main.load_celebration_effect(), "fireworks")
+
+    def test_invalid_persisted_hold_lighting_direction_uses_below(self):
+        with patch("main.load_app_setting", return_value="sideways"):
+            self.assertEqual(main.load_hold_lighting_direction(), "below")
 
 
 class CelebrationTests(unittest.TestCase):
@@ -1632,6 +1641,7 @@ class PathPrefixTests(unittest.TestCase):
             65,
             "bright",
             45,
+            "both",
         )
 
         self.assertIn("fetch('/cruxwledbridge/wall_lighting_settings'", html)
@@ -1653,6 +1663,12 @@ class PathPrefixTests(unittest.TestCase):
             "boulder_brightness_percent: Number(boulderBrightnessInput.value)",
             html,
         )
+        self.assertIn(
+            "hold_lighting_direction: form.elements.hold_lighting_direction.value",
+            html,
+        )
+        self.assertIn('name="hold_lighting_direction" value="both" checked', html)
+        self.assertIn("Ein oberster Griff ohne Beleuchtung darüber", html)
         self.assertIn("Helligkeit freier LEDs: {value}%", html)
         self.assertIn("Helligkeit der Boulder-LEDs: {value}%", html)
         self.assertEqual(html.count('id="save-settings"'), 1)
@@ -1756,6 +1772,7 @@ class PathPrefixTests(unittest.TestCase):
             main.bright_wall_brightness_percent,
             main.boulder_brightness_percent,
             main.celebration_effect,
+            main.hold_lighting_direction,
         )
         try:
             with patch("main.persist_app_settings") as persist:
@@ -1765,6 +1782,7 @@ class PathPrefixTests(unittest.TestCase):
                         bright_brightness_percent=35,
                         boulder_brightness_percent=70,
                         celebration_effect="pride",
+                        hold_lighting_direction="above",
                     )
                 ))
 
@@ -1773,6 +1791,7 @@ class PathPrefixTests(unittest.TestCase):
                 "bright_wall_brightness_percent": 35,
                 "boulder_brightness_percent": 70,
                 "celebration_effect": "pride",
+                "hold_lighting_direction": "above",
             })
             self.assertEqual(result, {
                 "message": "Wall lighting settings updated",
@@ -1780,18 +1799,36 @@ class PathPrefixTests(unittest.TestCase):
                 "bright_brightness_percent": 35,
                 "boulder_brightness_percent": 70,
                 "celebration_effect": "pride",
+                "hold_lighting_direction": "above",
             })
             self.assertEqual(main.wall_lighting_mode, "bright")
             self.assertEqual(main.bright_wall_brightness_percent, 35)
             self.assertEqual(main.boulder_brightness_percent, 70)
             self.assertEqual(main.celebration_effect, "pride")
+            self.assertEqual(main.hold_lighting_direction, "above")
         finally:
             (
                 main.wall_lighting_mode,
                 main.bright_wall_brightness_percent,
                 main.boulder_brightness_percent,
                 main.celebration_effect,
+                main.hold_lighting_direction,
             ) = original_values
+
+    def test_wall_lighting_settings_reject_invalid_hold_direction(self):
+        with patch("main.persist_app_settings") as persist:
+            response = asyncio.run(main.set_wall_lighting_settings(
+                main.WallLightingSettings(
+                    mode="dark",
+                    bright_brightness_percent=20,
+                    boulder_brightness_percent=100,
+                    celebration_effect="rainbow",
+                    hold_lighting_direction="sideways",
+                )
+            ))
+
+        self.assertEqual(response.status_code, 400)
+        persist.assert_not_called()
 
     def test_wall_lighting_brightness_rejects_values_outside_range(self):
         for brightness in (9, 101):
@@ -2129,6 +2166,106 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("let offset = 0", html)
         self.assertIn("grid.led_start = offset", html)
         self.assertIn("offset += activeIds.length", html)
+
+
+class HoldLightingDirectionTests(unittest.TestCase):
+    def setUp(self):
+        positions = utils.generate_grid(
+            (0, 0),
+            (10, 0),
+            (10, 20),
+            (0, 20),
+            3,
+            1,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        self.saved_settings = {
+            "r": 3,
+            "c": 1,
+            "alternating": False,
+            "alternating_start_column": 0,
+            "led_start_corner": "bottom_left",
+            "led_direction": "vertical",
+            "positions": positions,
+            "position_led_ids": {0: 0, 1: 1, 2: 2},
+        }
+
+    def test_grid_layout_retains_rows_independent_of_cable_order(self):
+        self.assertEqual(
+            utils.generate_grid_position_layout(
+                3,
+                1,
+                led_start_corner="bottom_left",
+                led_direction="vertical",
+            ),
+            {0: (2, 0), 1: (1, 0), 2: (0, 0)},
+        )
+
+    def test_above_direction_uses_the_next_rows_light(self):
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {0: "start", 1: "finish"},
+                self.saved_settings,
+                "above",
+            ),
+            {1: "start", 2: "finish"},
+        )
+
+    def test_both_direction_keeps_lights_above_and_below(self):
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {0: "start"},
+                self.saved_settings,
+                "both",
+            ),
+            {0: "start", 1: "start"},
+        )
+
+    def test_highest_hold_always_uses_its_below_light(self):
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {2: "finish"},
+                self.saved_settings,
+                "above",
+            ),
+            {2: "finish"},
+        )
+
+    def test_highest_hold_fallback_wins_shared_led_color(self):
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {1: "start", 2: "finish"},
+                self.saved_settings,
+                "above",
+            ),
+            {2: "finish"},
+        )
+
+    def test_multiple_grids_do_not_share_above_lights(self):
+        second_grid = {
+            **self.saved_settings,
+            "position_led_ids": {0: 3, 1: 4, 2: 5},
+        }
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {0: "start", 3: "finish"},
+                {"grids": [self.saved_settings, second_grid]},
+                "above",
+            ),
+            {1: "start", 4: "finish"},
+        )
+
+    def test_default_below_direction_keeps_existing_mapping(self):
+        holds = {0: "start", 2: "finish"}
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                holds,
+                self.saved_settings,
+                "below",
+            ),
+            holds,
+        )
 
 
 class WledTests(unittest.TestCase):

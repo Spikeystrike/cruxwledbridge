@@ -11,6 +11,11 @@ TRANSLATIONS = {
         "mode.bright_button": "Bright – dim unused LEDs",
         "mode.background_brightness": "Unused LED brightness: {value}%",
         "mode.boulder_brightness": "Boulder LED brightness: {value}%",
+        "direction.heading": "Hold illumination direction",
+        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. A highest hold without a light above it is always illuminated from below.",
+        "direction.below": "Below only",
+        "direction.above": "Above only",
+        "direction.both": "Above and below",
         "celebration.heading": "Send celebration",
         "celebration.description": "Choose the effect shown on all LEDs for about 3 seconds when the gym reports climb.sent.",
         "celebration.off": "Off",
@@ -33,6 +38,11 @@ TRANSLATIONS = {
         "mode.bright_button": "Hell – freie LEDs gedimmt",
         "mode.background_brightness": "Helligkeit freier LEDs: {value}%",
         "mode.boulder_brightness": "Helligkeit der Boulder-LEDs: {value}%",
+        "direction.heading": "Beleuchtungsrichtung der Griffe",
+        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Ein oberster Griff ohne Beleuchtung darüber wird immer von unten beleuchtet.",
+        "direction.below": "Nur von unten",
+        "direction.above": "Nur von oben",
+        "direction.both": "Oben und unten",
         "celebration.heading": "Jubeleffekt beim Top",
         "celebration.description": "Wähle den Effekt, der etwa 3 Sekunden lang auf allen LEDs läuft, wenn die Halle climb.sent meldet.",
         "celebration.off": "Aus",
@@ -55,6 +65,7 @@ def return_wall_lighting_html(
     bright_brightness_percent=20,
     wall_lighting_mode="dark",
     boulder_brightness_percent=100,
+    hold_lighting_direction="below",
 ):
     language_switch = language_switch_html(TRANSLATIONS)
     html = """
@@ -76,6 +87,10 @@ def return_wall_lighting_html(
             label[for="mode-dark"] { background: #555; }
             label[for="mode-bright"] { background: #007bff; }
             .mode-options input:checked + label { border-color: #111; box-shadow: 0 0 0 2px white inset; }
+            .direction-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+            .direction-options input { position: absolute; opacity: 0; pointer-events: none; }
+            .direction-options label { padding: 14px 8px; border: 2px solid transparent; border-radius: 7px; background: #6c757d; color: white; text-align: center; cursor: pointer; }
+            .direction-options input:checked + label { border-color: #111; box-shadow: 0 0 0 2px white inset; background: #0069d9; }
             .brightness-control { margin-top: 24px; text-align: center; }
             .brightness-control label { display: block; margin-bottom: 8px; font-weight: bold; }
             .brightness-control input { width: 100%; }
@@ -107,6 +122,19 @@ def return_wall_lighting_html(
                 <div class="brightness-control">
                     <label for="boulder-brightness" id="boulder-brightness-label">Boulder LED brightness: __BOULDER_BRIGHTNESS__%</label>
                     <input id="boulder-brightness" type="range" min="10" max="100" step="1" value="__BOULDER_BRIGHTNESS__">
+                </div>
+            </section>
+
+            <section>
+                <h2 data-i18n="direction.heading">Hold illumination direction</h2>
+                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. A highest hold without a light above it is always illuminated from below.</p>
+                <div class="direction-options">
+                    <input id="direction-below" type="radio" name="hold_lighting_direction" value="below" __DIRECTION_BELOW_CHECKED__>
+                    <label for="direction-below" data-i18n="direction.below">Below only</label>
+                    <input id="direction-above" type="radio" name="hold_lighting_direction" value="above" __DIRECTION_ABOVE_CHECKED__>
+                    <label for="direction-above" data-i18n="direction.above">Above only</label>
+                    <input id="direction-both" type="radio" name="hold_lighting_direction" value="both" __DIRECTION_BOTH_CHECKED__>
+                    <label for="direction-both" data-i18n="direction.both">Above and below</label>
                 </div>
             </section>
 
@@ -180,6 +208,7 @@ def return_wall_lighting_html(
                             mode: form.elements.mode.value,
                             bright_brightness_percent: Number(brightBrightnessInput.value),
                             boulder_brightness_percent: Number(boulderBrightnessInput.value),
+                            hold_lighting_direction: form.elements.hold_lighting_direction.value,
                             celebration_effect: celebrationSelect.value,
                         }),
                     });
@@ -216,5 +245,8 @@ def return_wall_lighting_html(
         .replace("__BOULDER_BRIGHTNESS__", str(boulder_brightness_percent))
         .replace("__DARK_CHECKED__", "checked" if wall_lighting_mode == "dark" else "")
         .replace("__BRIGHT_CHECKED__", "checked" if wall_lighting_mode == "bright" else "")
+        .replace("__DIRECTION_BELOW_CHECKED__", "checked" if hold_lighting_direction == "below" else "")
+        .replace("__DIRECTION_ABOVE_CHECKED__", "checked" if hold_lighting_direction == "above" else "")
+        .replace("__DIRECTION_BOTH_CHECKED__", "checked" if hold_lighting_direction == "both" else "")
         .replace("__LANGUAGE_SWITCH__", language_switch)
     )
