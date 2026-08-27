@@ -102,8 +102,89 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
-wall_lighting_mode = "dark"  # "dark" or "bright"
-bright_wall_brightness_percent = 20
+
+def load_app_setting(key, default=None):
+    """Load one JSON-compatible setting from the shared settings store."""
+    db = SessionLocal()
+    try:
+        setting = db.query(AppSettingDB).filter(AppSettingDB.key == key).first()
+        return setting.value if setting else default
+    finally:
+        db.close()
+
+
+def persist_app_settings(settings):
+    """Persist any number of current or future settings in one transaction."""
+    db = SessionLocal()
+    try:
+        for key, value in settings.items():
+            setting = db.query(AppSettingDB).filter(
+                AppSettingDB.key == key
+            ).first()
+            if setting:
+                setting.value = value
+            else:
+                db.add(AppSettingDB(key=key, value=value))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _load_percent_setting(key, default):
+    value = load_app_setting(key, default)
+    if isinstance(value, bool):
+        return default
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return default
+    return value if 10 <= value <= 100 else default
+
+
+def load_wall_lighting_mode():
+    mode = load_app_setting("wall_lighting_mode", "dark")
+    return mode if mode in {"dark", "bright"} else "dark"
+
+
+def load_celebration_effect():
+    default_effect = getattr(config, "celebration_effect", "rainbow")
+    if default_effect not in {"off", *CELEBRATION_EFFECTS}:
+        default_effect = "rainbow"
+
+    effect = load_app_setting("celebration_effect", default_effect)
+    return effect if effect in {"off", *CELEBRATION_EFFECTS} else default_effect
+
+
+def persist_celebration_effect(effect):
+    persist_app_settings({"celebration_effect": effect})
+
+
+def load_route_timeout_minutes():
+    value = load_app_setting("route_timeout_minutes", 0)
+    if isinstance(value, bool):
+        return 0
+    try:
+        value = int(value)
+        return value if value >= 0 else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def persist_route_timeout_minutes(minutes):
+    persist_app_settings({"route_timeout_minutes": int(minutes)})
+
+
+wall_lighting_mode = load_wall_lighting_mode()
+bright_wall_brightness_percent = _load_percent_setting(
+    "bright_wall_brightness_percent",
+    20,
+)
+boulder_brightness_percent = _load_percent_setting(
+    "boulder_brightness_percent",
+    100,
+)
+celebration_effect = load_celebration_effect()
+route_timeout_minutes = load_route_timeout_minutes()
 current_wall_holds = {}
 _pending_viewed_holds = None
 _route_lighting_active = False
@@ -117,79 +198,6 @@ _celebration_tasks = set()
 _route_timeout_generation = 0
 _route_timeout_task = None
 _route_timeout_sleep_task = None
-
-
-def load_celebration_effect():
-    default_effect = getattr(config, "celebration_effect", "rainbow")
-    if default_effect not in {"off", *CELEBRATION_EFFECTS}:
-        default_effect = "rainbow"
-
-    db = SessionLocal()
-    try:
-        setting = db.query(AppSettingDB).filter(
-            AppSettingDB.key == "celebration_effect"
-        ).first()
-        if setting and setting.value in {"off", *CELEBRATION_EFFECTS}:
-            return setting.value
-        return default_effect
-    finally:
-        db.close()
-
-
-def persist_celebration_effect(effect):
-    db = SessionLocal()
-    try:
-        setting = db.query(AppSettingDB).filter(
-            AppSettingDB.key == "celebration_effect"
-        ).first()
-        if setting:
-            setting.value = effect
-        else:
-            db.add(AppSettingDB(key="celebration_effect", value=effect))
-        db.commit()
-    finally:
-        db.close()
-
-
-celebration_effect = load_celebration_effect()
-
-
-def load_route_timeout_minutes():
-    db = SessionLocal()
-    try:
-        setting = db.query(AppSettingDB).filter(
-            AppSettingDB.key == "route_timeout_minutes"
-        ).first()
-        value = setting.value if setting else 0
-        if isinstance(value, bool):
-            return 0
-        value = int(value)
-        return value if value >= 0 else 0
-    except (TypeError, ValueError):
-        return 0
-    finally:
-        db.close()
-
-
-def persist_route_timeout_minutes(minutes):
-    db = SessionLocal()
-    try:
-        setting = db.query(AppSettingDB).filter(
-            AppSettingDB.key == "route_timeout_minutes"
-        ).first()
-        if setting:
-            setting.value = int(minutes)
-        else:
-            db.add(AppSettingDB(
-                key="route_timeout_minutes",
-                value=int(minutes),
-            ))
-        db.commit()
-    finally:
-        db.close()
-
-
-route_timeout_minutes = load_route_timeout_minutes()
 
 
 def _cancel_route_timeout():
@@ -229,6 +237,7 @@ async def _run_route_timeout(delay_seconds, generation):
                 {},
                 "dark",
                 bright_wall_brightness_percent,
+                boulder_brightness_percent,
             )
     except asyncio.CancelledError:
         return
@@ -264,6 +273,7 @@ async def _restore_current_wall():
             dict(current_wall_holds),
             wall_lighting_mode,
             bright_wall_brightness_percent,
+            boulder_brightness_percent,
         )
         schedule_route_timeout()
     else:
@@ -272,6 +282,7 @@ async def _restore_current_wall():
             {},
             "dark",
             bright_wall_brightness_percent,
+            boulder_brightness_percent,
         )
 
 
@@ -430,6 +441,13 @@ class CelebrationEffectSelection(BaseModel):
     effect: str
 
 
+class WallLightingSettings(BaseModel):
+    mode: str
+    bright_brightness_percent: int = Field(ge=10, le=100)
+    boulder_brightness_percent: int = Field(ge=10, le=100)
+    celebration_effect: str
+
+
 class EnergySavingSettings(BaseModel):
     route_timeout_minutes: int = Field(ge=0)
 
@@ -485,7 +503,8 @@ class GridTranslation(BaseModel):
     led_start_corner: str = "bottom_left"
     led_direction: str = "vertical"
     excluded_position_ids: List[int] = Field(default_factory=list)
-    auto_exclude_empty: bool = False
+    auto_exclude_empty: bool = True
+    apply_auto_exclusions: bool = False
 
 
 class WallTranslation(GridTranslation):
@@ -578,6 +597,7 @@ async def viewed(payload: PayL, request: Request):
                     holds,
                     wall_lighting_mode,
                     bright_wall_brightness_percent,
+                    boulder_brightness_percent,
                 )
                 _route_lighting_active = True
                 schedule_route_timeout()
@@ -611,6 +631,10 @@ async def sent(payload: SentPayL, request: Request):
 async def set_wall_lighting_mode(payload: WallLightingMode):
     global wall_lighting_mode, bright_wall_brightness_percent
     if payload.mode in ["dark", "bright"]:
+        settings = {"wall_lighting_mode": payload.mode}
+        if payload.brightness is not None:
+            settings["bright_wall_brightness_percent"] = payload.brightness
+        persist_app_settings(settings)
         wall_lighting_mode = payload.mode
         if payload.brightness is not None:
             bright_wall_brightness_percent = payload.brightness
@@ -620,6 +644,49 @@ async def set_wall_lighting_mode(payload: WallLightingMode):
         }
     else:
         return JSONResponse(status_code=400, content={"message": "Invalid mode. Use 'dark' or 'bright'."})
+
+
+@app.post("/wall_lighting_settings")
+async def set_wall_lighting_settings(payload: WallLightingSettings):
+    global wall_lighting_mode, bright_wall_brightness_percent
+    global boulder_brightness_percent, celebration_effect
+    global _celebration_active, _celebration_generation
+
+    if payload.mode not in {"dark", "bright"}:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Invalid mode. Use 'dark' or 'bright'."},
+        )
+    if payload.celebration_effect not in {"off", *CELEBRATION_EFFECTS}:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "Invalid celebration effect."},
+        )
+
+    persist_app_settings({
+        "wall_lighting_mode": payload.mode,
+        "bright_wall_brightness_percent": payload.bright_brightness_percent,
+        "boulder_brightness_percent": payload.boulder_brightness_percent,
+        "celebration_effect": payload.celebration_effect,
+    })
+    wall_lighting_mode = payload.mode
+    bright_wall_brightness_percent = payload.bright_brightness_percent
+    boulder_brightness_percent = payload.boulder_brightness_percent
+    celebration_effect = payload.celebration_effect
+
+    if celebration_effect == "off" and _celebration_active:
+        _celebration_generation += 1
+        async with _lighting_state_lock:
+            await _restore_current_wall()
+            _celebration_active = False
+
+    return {
+        "message": "Wall lighting settings updated",
+        "mode": wall_lighting_mode,
+        "bright_brightness_percent": bright_wall_brightness_percent,
+        "boulder_brightness_percent": boulder_brightness_percent,
+        "celebration_effect": celebration_effect,
+    }
 
 
 @app.post("/celebration_effect")
@@ -649,6 +716,8 @@ async def get_wall_lighting():
         APP_PATH_PREFIX,
         celebration_effect,
         bright_wall_brightness_percent,
+        wall_lighting_mode,
+        boulder_brightness_percent,
     )
     return HTMLResponse(content=html_content)
 
@@ -895,7 +964,10 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
     for grid_index, (grid_payload, full_grid, excluded_position_ids) in enumerate(
         prepared_grids
     ):
-        if grid_payload.auto_exclude_empty:
+        if (
+            grid_payload.auto_exclude_empty
+            and grid_payload.apply_auto_exclusions
+        ):
             excluded_position_ids.update(
                 position_id
                 for position_id in full_grid
@@ -907,7 +979,7 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
             for position_id in sorted(full_grid)
             if position_id not in excluded_position_ids
         ]
-        if not active_position_ids and not grid_payload.auto_exclude_empty:
+        if not active_position_ids and not grid_payload.apply_auto_exclusions:
             db.close()
             raise HTTPException(
                 status_code=400,
@@ -942,6 +1014,7 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
             "alternating_start_column": grid_payload.alternating_start_column,
             "led_start_corner": grid_payload.led_start_corner,
             "led_direction": grid_payload.led_direction,
+            "auto_exclude_empty": grid_payload.auto_exclude_empty,
             "excluded_position_ids": sorted(excluded_position_ids),
             "positions": full_grid,
             "position_led_ids": position_led_ids,

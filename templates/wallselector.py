@@ -30,11 +30,12 @@ TRANSLATIONS = {
         "form.bottom_right": "Bottom right",
         "form.horizontal": "Horizontal (row by row)",
         "form.vertical": "Vertical (column by column)",
+        "form.auto_exclude_empty": "Automatically disable positions without a nearby hold",
         "help.alternating": "For an alternating grid, Columns is the number of all possible horizontal positions. It can be even or odd; the positions used alternate from row to row.",
         "help.numbering": "The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.",
         "help.corners": "Click the 4 corner points in this order:",
         "help.corner_order": "Top left, top right, bottom right, bottom left",
-        "help.selection": "New or geometrically changed grids automatically disable positions without a nearby CRUX hold. Click any grid point to disable or reactivate it. Then click",
+        "help.selection": "When automatic disabling is enabled for this grid, new or geometrically changed layouts disable positions without a nearby CRUX hold. Click any grid point to disable or reactivate it. Then click",
         "help.save_selection": "Save all grids",
         "image.alt": "Climbing wall",
         "button.send": "Save all grids",
@@ -77,11 +78,12 @@ TRANSLATIONS = {
         "form.bottom_right": "Unten rechts",
         "form.horizontal": "Horizontal (zeilenweise)",
         "form.vertical": "Vertikal (spaltenweise)",
+        "form.auto_exclude_empty": "Positionen ohne Griff in der Nähe automatisch abwählen",
         "help.alternating": "Beim alternierenden Raster ist Spalten die Anzahl aller möglichen horizontalen Positionen. Die Zahl darf gerade oder ungerade sein; die verwendeten Positionen wechseln von Reihe zu Reihe.",
         "help.numbering": "Das erste Raster beginnt bei LED 0. Jedes weitere Raster setzt nach dem vorherigen Tab fort; ziehe die Tabs, um die Reihenfolge zu ändern.",
         "help.corners": "Bitte klicke die 4 Eckpunkte in dieser Reihenfolge an:",
         "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
-        "help.selection": "Bei neuen oder geometrisch geänderten Rastern werden Positionen ohne CRUX-Griff in der Nähe automatisch abgewählt. Du kannst jeden Rasterpunkt anklicken, um ihn abzuwählen oder wieder zu aktivieren. Klicke danach auf",
+        "help.selection": "Wenn das automatische Abwählen für dieses Raster aktiv ist, werden bei neuen oder geometrisch geänderten Rastern Positionen ohne CRUX-Griff in der Nähe abgewählt. Du kannst jeden Rasterpunkt anklicken, um ihn abzuwählen oder wieder zu aktivieren. Klicke danach auf",
         "help.save_selection": "Alle Raster speichern",
         "image.alt": "Kletterwand",
         "button.send": "Alle Raster speichern",
@@ -166,6 +168,9 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             </select>
         </div>
         <div class="form-row">
+            <label for="auto-exclude-empty"><input type="checkbox" id="auto-exclude-empty" checked><span data-i18n="form.auto_exclude_empty">Automatically disable positions without a nearby hold</span></label>
+        </div>
+        <div class="form-row">
             <label for="led-start-corner" data-i18n="form.led_zero">LED start:</label>
             <select id="led-start-corner">
                 <option value="top_left" data-i18n="form.top_left">Top left</option>
@@ -204,6 +209,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         const columns = document.getElementById('columns');
         const ledStartCornerSelect = document.getElementById('led-start-corner');
         const ledDirectionSelect = document.getElementById('led-direction');
+        const autoExcludeEmptyCheckbox = document.getElementById('auto-exclude-empty');
         const savedCreation = __SAVED_CREATION__;
         const wallImageWidth = __WALL_IMAGE_WIDTH__;
         const wallImageHeight = __WALL_IMAGE_HEIGHT__;
@@ -220,7 +226,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
         function createEmptyGrid() {
-            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: false, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
+            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: true, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
         }
         function normalizeGrid(grid, index) {
             return { ...createEmptyGrid(), ...grid, id: grid.id || `grid-${index + 1}`, points: grid.points || [], positions: grid.positions || null, position_led_ids: grid.position_led_ids || {}, position_hold_ids: grid.position_hold_ids || {}, excluded_position_ids: grid.excluded_position_ids || [] };
@@ -272,6 +278,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             grid.alternating_start_column = numericValue(alternatingStart) ?? 0;
             grid.led_start_corner = ledStartCornerSelect.value;
             grid.led_direction = ledDirectionSelect.value;
+            grid.auto_exclude_empty = autoExcludeEmptyCheckbox.checked;
             grid.selection_dirty = selectionDirty;
             grid.last_grid_settings = lastGridSettings;
         }
@@ -376,6 +383,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             alternatingStart.disabled = !alternatingCheckbox.checked;
             ledStartCornerSelect.value = grid.led_start_corner || 'bottom_left';
             ledDirectionSelect.value = grid.led_direction || 'vertical';
+            autoExcludeEmptyCheckbox.checked = grid.auto_exclude_empty !== false;
             lastGridSettings = grid.last_grid_settings;
             if (!lastGridSettings && points.length === 4 && renderedPositions) lastGridSettings = gridSettingsFor(grid);
             activeGridLoaded = true;
@@ -444,9 +452,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 if (grid.points.length !== 4 || !Number.isInteger(grid.r) || grid.r < 1 || !Number.isInteger(grid.c) || grid.c < 1) { alert(t('alert.incomplete_grid', { number: index + 1 })); return; }
                 if (grid.alternating && grid.c < 2) { alert(t('alert.alternating_columns')); return; }
                 const settings = gridSettingsFor(grid);
-                grid.auto_exclude_empty = !grid.positions || !grid.last_grid_settings || settings !== grid.last_grid_settings;
+                const allPositionsExcluded = Boolean(grid.positions && grid.excluded_position_ids.length === Object.keys(grid.positions).length);
+                grid.apply_auto_exclusions = Boolean(grid.auto_exclude_empty && (!grid.positions || !grid.last_grid_settings || settings !== grid.last_grid_settings || allPositionsExcluded));
                 if (grid.last_grid_settings && settings !== grid.last_grid_settings) grid.excluded_position_ids = [];
-                if (grid.positions && grid.excluded_position_ids.length === Object.keys(grid.positions).length) { alert(t('alert.active_position')); return; }
+                if (allPositionsExcluded && !grid.apply_auto_exclusions) { alert(t('alert.active_position')); return; }
             }
             const activeId = grids[activeGridIndex].id;
             const payload = {
@@ -458,6 +467,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     r: grid.r, c: grid.c, alternating: Boolean(grid.alternating), alternating_start_column: Number(grid.alternating_start_column || 0),
                     led_start_corner: grid.led_start_corner, led_direction: grid.led_direction, excluded_position_ids: grid.excluded_position_ids,
                     auto_exclude_empty: Boolean(grid.auto_exclude_empty),
+                    apply_auto_exclusions: Boolean(grid.apply_auto_exclusions),
                 })),
             };
             try {

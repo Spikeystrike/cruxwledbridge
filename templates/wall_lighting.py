@@ -3,18 +3,14 @@ from templates.language import language_switch_html
 
 TRANSLATIONS = {
     "en": {
-        "page.title": "Wall lighting mode",
-        "page.heading": "Wall lighting mode",
-        "page.description": "Choose the lighting mode for the climbing wall.",
+        "page.title": "Wall lighting settings",
+        "page.heading": "Wall lighting settings",
+        "page.description": "Configure how routes and unused LEDs are illuminated.",
+        "mode.heading": "Lighting mode",
         "mode.dark_button": "Dark – boulder only",
         "mode.bright_button": "Bright – dim unused LEDs",
-        "mode.brightness": "Bright mode strength: {value}%",
-        "mode.dark": "dark",
-        "mode.bright": "bright",
-        "status.switching": "Switching...",
-        "status.success": "Success! Wall lighting mode set to {mode}.",
-        "status.error": "Error: {message}",
-        "status.generic_error": "An error occurred.",
+        "mode.background_brightness": "Unused LED brightness: {value}%",
+        "mode.boulder_brightness": "Boulder LED brightness: {value}%",
         "celebration.heading": "Send celebration",
         "celebration.description": "Choose the effect shown on all LEDs for about 3 seconds when the gym reports climb.sent.",
         "celebration.off": "Off",
@@ -22,24 +18,21 @@ TRANSLATIONS = {
         "celebration.fireworks": "Fireworks",
         "celebration.color_twinkles": "Color sparkles",
         "celebration.pride": "Rainbow party",
-        "celebration.save": "Save effect",
-        "celebration.saving": "Saving effect...",
-        "celebration.saved": "Celebration effect saved: {effect}.",
-        "celebration.error": "Could not save celebration effect: {message}",
+        "save.button": "Save all lighting settings",
+        "status.saving": "Saving settings...",
+        "status.saved": "All wall lighting settings were saved.",
+        "status.error": "Could not save settings: {message}",
+        "status.generic_error": "An error occurred.",
     },
     "de": {
-        "page.title": "Wand-Beleuchtungsmodus",
-        "page.heading": "Wand-Beleuchtungsmodus",
-        "page.description": "Wähle den Beleuchtungsmodus für die Kletterwand.",
+        "page.title": "Wandbeleuchtungs-Einstellungen",
+        "page.heading": "Wandbeleuchtungs-Einstellungen",
+        "page.description": "Lege fest, wie Routen und freie LEDs beleuchtet werden.",
+        "mode.heading": "Beleuchtungsmodus",
         "mode.dark_button": "Dunkel – nur Boulder",
         "mode.bright_button": "Hell – freie LEDs gedimmt",
-        "mode.brightness": "Stärke im hellen Modus: {value}%",
-        "mode.dark": "dunkel",
-        "mode.bright": "hell",
-        "status.switching": "Wird umgeschaltet...",
-        "status.success": "Erfolgreich! Wand-Beleuchtungsmodus auf {mode} gesetzt.",
-        "status.error": "Fehler: {message}",
-        "status.generic_error": "Ein Fehler ist aufgetreten.",
+        "mode.background_brightness": "Helligkeit freier LEDs: {value}%",
+        "mode.boulder_brightness": "Helligkeit der Boulder-LEDs: {value}%",
         "celebration.heading": "Jubeleffekt beim Top",
         "celebration.description": "Wähle den Effekt, der etwa 3 Sekunden lang auf allen LEDs läuft, wenn die Halle climb.sent meldet.",
         "celebration.off": "Aus",
@@ -47,10 +40,11 @@ TRANSLATIONS = {
         "celebration.fireworks": "Feuerwerk",
         "celebration.color_twinkles": "Buntes Funkeln",
         "celebration.pride": "Regenbogen-Party",
-        "celebration.save": "Effekt speichern",
-        "celebration.saving": "Effekt wird gespeichert...",
-        "celebration.saved": "Jubeleffekt gespeichert: {effect}.",
-        "celebration.error": "Jubeleffekt konnte nicht gespeichert werden: {message}",
+        "save.button": "Alle Beleuchtungseinstellungen speichern",
+        "status.saving": "Einstellungen werden gespeichert...",
+        "status.saved": "Alle Wandbeleuchtungs-Einstellungen wurden gespeichert.",
+        "status.error": "Einstellungen konnten nicht gespeichert werden: {message}",
+        "status.generic_error": "Ein Fehler ist aufgetreten.",
     },
 }
 
@@ -59,6 +53,8 @@ def return_wall_lighting_html(
     path_prefix="",
     celebration_effect="rainbow",
     bright_brightness_percent=20,
+    wall_lighting_mode="dark",
+    boulder_brightness_percent=100,
 ):
     language_switch = language_switch_html(TRANSLATIONS)
     html = """
@@ -67,44 +63,56 @@ def return_wall_lighting_html(
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title data-i18n="page.title">Wall lighting mode</title>
+        <title data-i18n="page.title">Wall lighting settings</title>
         <style>
-            body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin-top: 50px; background-color: #f4f4f9; }
-            h1 { color: #333; }
-            .mode-button { padding: 12px 25px; font-size: 16px; margin: 10px; cursor: pointer; border-radius: 5px; border: none; color: white; transition: background-color 0.3s; }
-            #btn-dark { background-color: #555; }
-            #btn-dark:hover { background-color: #333; }
-            #btn-bright { background-color: #007BFF; }
-            #btn-bright:hover { background-color: #0056b3; }
-            .brightness-control { width: min(420px, calc(100vw - 48px)); margin: 12px 0 4px; text-align: center; }
+            body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 40px 20px; background-color: #f4f4f9; color: #333; }
+            h1, h2 { color: #333; }
+            form { width: min(560px, 100%); }
+            section { padding: 22px 0; border-top: 1px solid #ccc; }
+            section:first-of-type { border-top: 0; }
+            .mode-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+            .mode-options input { position: absolute; opacity: 0; pointer-events: none; }
+            .mode-options label { padding: 14px; border: 2px solid transparent; border-radius: 7px; color: white; text-align: center; cursor: pointer; }
+            label[for="mode-dark"] { background: #555; }
+            label[for="mode-bright"] { background: #007bff; }
+            .mode-options input:checked + label { border-color: #111; box-shadow: 0 0 0 2px white inset; }
+            .brightness-control { margin-top: 24px; text-align: center; }
             .brightness-control label { display: block; margin-bottom: 8px; font-weight: bold; }
             .brightness-control input { width: 100%; }
-            #status { margin-top: 20px; font-weight: bold; font-size: 1.1em; }
-            .celebration { margin-top: 32px; padding-top: 22px; border-top: 1px solid #ccc; text-align: center; max-width: 520px; }
-            .celebration h2 { color: #333; margin-bottom: 8px; }
-            .celebration select, .celebration button { padding: 10px 14px; font-size: 16px; border-radius: 5px; }
-            .celebration button { margin-left: 8px; border: none; color: white; background: #6f42c1; cursor: pointer; }
-            .celebration button:hover { background: #59359a; }
-            #celebration-status { margin-top: 12px; font-weight: bold; }
+            .celebration select { box-sizing: border-box; width: 100%; padding: 10px 14px; font-size: 16px; border-radius: 5px; }
+            .save-area { padding-top: 24px; border-top: 1px solid #ccc; text-align: center; }
+            #save-settings { padding: 13px 22px; border: 0; border-radius: 6px; background: #218838; color: white; font-size: 17px; font-weight: 600; cursor: pointer; }
+            #save-settings:hover { background: #176b2b; }
+            #save-settings:disabled { opacity: 0.65; cursor: wait; }
+            #status { min-height: 1.4em; margin-top: 14px; font-weight: bold; }
         </style>
     </head>
     <body>
-        <h1 data-i18n="page.heading">Wall lighting mode</h1>
-        <p data-i18n="page.description">Choose the lighting mode for the climbing wall.</p>
-        <div>
-            <button class="mode-button" id="btn-dark" onclick="setMode('dark')" data-i18n="mode.dark_button">Dark – boulder only</button>
-            <button class="mode-button" id="btn-bright" onclick="setMode('bright')" data-i18n="mode.bright_button">Bright – dim unused LEDs</button>
-        </div>
-        <div class="brightness-control">
-            <label for="bright-brightness" id="bright-brightness-label">Bright mode strength: __BRIGHT_BRIGHTNESS__%</label>
-            <input id="bright-brightness" type="range" min="10" max="100" step="1" value="__BRIGHT_BRIGHTNESS__">
-        </div>
-        <div id="status"></div>
+        <h1 data-i18n="page.heading">Wall lighting settings</h1>
+        <p data-i18n="page.description">Configure how routes and unused LEDs are illuminated.</p>
 
-        <section class="celebration">
-            <h2 data-i18n="celebration.heading">Send celebration</h2>
-            <p data-i18n="celebration.description">Choose the effect shown on all LEDs for about 3 seconds when the gym reports climb.sent.</p>
-            <div>
+        <form id="wall-lighting-form">
+            <section>
+                <h2 data-i18n="mode.heading">Lighting mode</h2>
+                <div class="mode-options">
+                    <input id="mode-dark" type="radio" name="mode" value="dark" __DARK_CHECKED__>
+                    <label for="mode-dark" data-i18n="mode.dark_button">Dark – boulder only</label>
+                    <input id="mode-bright" type="radio" name="mode" value="bright" __BRIGHT_CHECKED__>
+                    <label for="mode-bright" data-i18n="mode.bright_button">Bright – dim unused LEDs</label>
+                </div>
+                <div class="brightness-control">
+                    <label for="bright-brightness" id="bright-brightness-label">Unused LED brightness: __BRIGHT_BRIGHTNESS__%</label>
+                    <input id="bright-brightness" type="range" min="10" max="100" step="1" value="__BRIGHT_BRIGHTNESS__">
+                </div>
+                <div class="brightness-control">
+                    <label for="boulder-brightness" id="boulder-brightness-label">Boulder LED brightness: __BOULDER_BRIGHTNESS__%</label>
+                    <input id="boulder-brightness" type="range" min="10" max="100" step="1" value="__BOULDER_BRIGHTNESS__">
+                </div>
+            </section>
+
+            <section class="celebration">
+                <h2 data-i18n="celebration.heading">Send celebration</h2>
+                <p data-i18n="celebration.description">Choose the effect shown on all LEDs for about 3 seconds when the gym reports climb.sent.</p>
                 <select id="celebration-effect" aria-label="Send celebration">
                     <option value="off" data-i18n="celebration.off">Off</option>
                     <option value="rainbow" data-i18n="celebration.rainbow">Moving rainbow</option>
@@ -112,135 +120,101 @@ def return_wall_lighting_html(
                     <option value="color_twinkles" data-i18n="celebration.color_twinkles">Color sparkles</option>
                     <option value="pride" data-i18n="celebration.pride">Rainbow party</option>
                 </select>
-                <button type="button" onclick="setCelebrationEffect()" data-i18n="celebration.save">Save effect</button>
+            </section>
+
+            <div class="save-area">
+                <button id="save-settings" type="submit" data-i18n="save.button">Save all lighting settings</button>
+                <div id="status" role="status" aria-live="polite"></div>
             </div>
-            <div id="celebration-status"></div>
-        </section>
+        </form>
 
         __LANGUAGE_SWITCH__
         <script>
-            const statusState = { kind: 'idle' };
-            const celebrationStatusState = { kind: 'idle' };
+            const form = document.getElementById('wall-lighting-form');
+            const saveButton = document.getElementById('save-settings');
+            const statusDiv = document.getElementById('status');
             const celebrationSelect = document.getElementById('celebration-effect');
-            const brightnessInput = document.getElementById('bright-brightness');
+            const brightBrightnessInput = document.getElementById('bright-brightness');
+            const boulderBrightnessInput = document.getElementById('boulder-brightness');
+            const statusState = { kind: 'idle', message: '' };
             celebrationSelect.value = '__CELEBRATION_EFFECT__';
 
-            function renderBrightnessLabel() {
+            function renderBrightnessLabels() {
                 document.getElementById('bright-brightness-label').textContent = window.cruxI18n.t(
-                    'mode.brightness',
-                    { value: brightnessInput.value },
+                    'mode.background_brightness',
+                    { value: brightBrightnessInput.value },
+                );
+                document.getElementById('boulder-brightness-label').textContent = window.cruxI18n.t(
+                    'mode.boulder_brightness',
+                    { value: boulderBrightnessInput.value },
                 );
             }
 
-            brightnessInput.addEventListener('input', renderBrightnessLabel);
-
             function renderStatus() {
-                const statusDiv = document.getElementById('status');
                 const t = window.cruxI18n.t;
-                if (statusState.kind === 'switching') {
-                    statusDiv.textContent = t('status.switching');
-                } else if (statusState.kind === 'success') {
-                    statusDiv.textContent = t('status.success', {
-                        mode: t(`mode.${statusState.mode}`),
-                    });
+                if (statusState.kind === 'saving') {
+                    statusDiv.textContent = t('status.saving');
+                } else if (statusState.kind === 'saved') {
+                    statusDiv.textContent = t('status.saved');
                 } else if (statusState.kind === 'error') {
                     statusDiv.textContent = t('status.error', { message: statusState.message });
+                } else {
+                    statusDiv.textContent = '';
                 }
             }
 
-            async function setMode(mode) {
-                const statusDiv = document.getElementById('status');
-                statusState.kind = 'switching';
+            brightBrightnessInput.addEventListener('input', renderBrightnessLabels);
+            boulderBrightnessInput.addEventListener('input', renderBrightnessLabels);
+
+            form.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                statusState.kind = 'saving';
+                saveButton.disabled = true;
+                statusDiv.style.color = '#555';
                 renderStatus();
                 try {
-                    const response = await fetch('__PATH_PREFIX__/wall_lighting_mode', {
+                    const response = await fetch('__PATH_PREFIX__/wall_lighting_settings', {
                         method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
+                        headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            mode: mode,
-                            brightness: Number(brightnessInput.value),
+                            mode: form.elements.mode.value,
+                            bright_brightness_percent: Number(brightBrightnessInput.value),
+                            boulder_brightness_percent: Number(boulderBrightnessInput.value),
+                            celebration_effect: celebrationSelect.value,
                         }),
-                    });
-                    const result = await response.json();
-                    if (response.ok) {
-                        statusState.kind = 'success';
-                        statusState.mode = mode;
-                        statusDiv.style.color = 'green';
-                    } else {
-                        throw new Error(result.message || window.cruxI18n.t('status.generic_error'));
-                    }
-                } catch (error) {
-                    statusState.kind = 'error';
-                    statusState.message = error.message;
-                    statusDiv.style.color = 'red';
-                }
-                renderStatus();
-            }
-
-            function renderCelebrationStatus() {
-                const statusDiv = document.getElementById('celebration-status');
-                const t = window.cruxI18n.t;
-                if (celebrationStatusState.kind === 'saving') {
-                    statusDiv.textContent = t('celebration.saving');
-                } else if (celebrationStatusState.kind === 'saved') {
-                    statusDiv.textContent = t('celebration.saved', {
-                        effect: t(`celebration.${celebrationStatusState.effect}`),
-                    });
-                } else if (celebrationStatusState.kind === 'error') {
-                    statusDiv.textContent = t('celebration.error', {
-                        message: celebrationStatusState.message,
-                    });
-                }
-            }
-
-            async function setCelebrationEffect() {
-                const statusDiv = document.getElementById('celebration-status');
-                const effect = celebrationSelect.value;
-                celebrationStatusState.kind = 'saving';
-                renderCelebrationStatus();
-                try {
-                    const response = await fetch('__PATH_PREFIX__/celebration_effect', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ effect: effect }),
                     });
                     const result = await response.json();
                     if (!response.ok) {
                         throw new Error(result.message || window.cruxI18n.t('status.generic_error'));
                     }
-                    celebrationStatusState.kind = 'saved';
-                    celebrationStatusState.effect = result.effect;
+                    statusState.kind = 'saved';
                     statusDiv.style.color = 'green';
                 } catch (error) {
-                    celebrationStatusState.kind = 'error';
-                    celebrationStatusState.message = error.message;
+                    statusState.kind = 'error';
+                    statusState.message = error.message;
                     statusDiv.style.color = 'red';
+                } finally {
+                    saveButton.disabled = false;
+                    renderStatus();
                 }
-                renderCelebrationStatus();
-            }
-
-            window.addEventListener('crux-language-change', () => {
-                renderStatus();
-                renderBrightnessLabel();
-                renderCelebrationStatus();
             });
 
-            renderBrightnessLabel();
+            window.addEventListener('crux-language-change', () => {
+                renderBrightnessLabels();
+                renderStatus();
+            });
+
+            renderBrightnessLabels();
         </script>
     </body>
     </html>
     """
-    return html.replace("__PATH_PREFIX__", path_prefix).replace(
-        "__CELEBRATION_EFFECT__",
-        celebration_effect,
-    ).replace(
-        "__BRIGHT_BRIGHTNESS__",
-        str(bright_brightness_percent),
-    ).replace(
-        "__LANGUAGE_SWITCH__",
-        language_switch,
+    return (
+        html.replace("__PATH_PREFIX__", path_prefix)
+        .replace("__CELEBRATION_EFFECT__", celebration_effect)
+        .replace("__BRIGHT_BRIGHTNESS__", str(bright_brightness_percent))
+        .replace("__BOULDER_BRIGHTNESS__", str(boulder_brightness_percent))
+        .replace("__DARK_CHECKED__", "checked" if wall_lighting_mode == "dark" else "")
+        .replace("__BRIGHT_CHECKED__", "checked" if wall_lighting_mode == "bright" else "")
+        .replace("__LANGUAGE_SWITCH__", language_switch)
     )

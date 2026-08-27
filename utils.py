@@ -252,9 +252,30 @@ def ledCalculation(holds, full_grid, position_led_ids):
     return holds2led
 
 
-def sendLightToBoulderwall(holds, mode="dark", bright_brightness_percent=20):
+def _scale_hex_color(color, brightness_percent):
+    color = color.lstrip("#")
+    if len(color) != 6:
+        raise ValueError(f"Invalid RGB color: {color}")
+    try:
+        channels = [int(color[index:index + 2], 16) for index in range(0, 6, 2)]
+    except ValueError as exc:
+        raise ValueError(f"Invalid RGB color: {color}") from exc
+    return "".join(
+        f"{round(channel * brightness_percent / 100):02X}"
+        for channel in channels
+    )
+
+
+def sendLightToBoulderwall(
+    holds,
+    mode="dark",
+    bright_brightness_percent=20,
+    boulder_brightness_percent=100,
+):
     if not 10 <= bright_brightness_percent <= 100:
         raise ValueError("Bright wall brightness must be between 10 and 100 percent")
+    if not 10 <= boulder_brightness_percent <= 100:
+        raise ValueError("Boulder brightness must be between 10 and 100 percent")
 
     colors = config.colors
     hole2LEDS = config.hole2LEDS
@@ -263,7 +284,10 @@ def sendLightToBoulderwall(holds, mode="dark", bright_brightness_percent=20):
     led = {}
     for hole_id, hold_type in holds.items():
         for physical_led_id in hole2LEDS[hole_id]:
-            led[physical_led_id] = colors[hold_type]
+            led[physical_led_id] = _scale_hex_color(
+                colors[hold_type],
+                boulder_brightness_percent,
+            )
 
     controllers = _wled_controllers()
     for controller in controllers:
