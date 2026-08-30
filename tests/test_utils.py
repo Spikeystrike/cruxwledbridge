@@ -1692,6 +1692,20 @@ class PathPrefixTests(unittest.TestCase):
             "above_brightness_percent: Number(aboveBrightnessInput.value)",
             html,
         )
+        self.assertIn("id=\"above-brightness-control\"", html)
+        self.assertIn(
+            "form.elements.hold_lighting_direction.value === 'both'",
+            html,
+        )
+        self.assertIn("aboveBrightnessInput.disabled = !enabled", html)
+        self.assertIn(
+            "aboveBrightnessControl.classList.toggle('is-disabled', !enabled)",
+            html,
+        )
+        self.assertIn(
+            "input.addEventListener('change', renderAboveBrightnessAvailability)",
+            html,
+        )
         self.assertIn(
             "hold_lighting_direction: form.elements.hold_lighting_direction.value",
             html,
@@ -2247,14 +2261,14 @@ class HoldLightingDirectionTests(unittest.TestCase):
             {0: (2, 0), 1: (1, 0), 2: (0, 0)},
         )
 
-    def test_above_direction_uses_the_next_rows_light(self):
+    def test_above_only_uses_regular_boulder_brightness_marker(self):
         self.assertEqual(
             main.apply_hold_lighting_direction(
                 {0: "start", 1: "finish"},
                 self.saved_settings,
                 "above",
             ),
-            {1: ("start", "above"), 2: ("finish", "above")},
+            {1: "start", 2: "finish"},
         )
 
     def test_both_direction_keeps_lights_above_and_below(self):
@@ -2373,7 +2387,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 saved_settings,
                 "above",
             ),
-            {target_position: ("start", "above")},
+            {target_position: "start"},
         )
 
     def test_upper_offset_row_falls_back_instead_of_using_side_light(self):
@@ -2496,7 +2510,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 {"grids": [self.saved_settings, second_grid]},
                 "above",
             ),
-            {1: ("start", "above"), 4: ("finish", "above")},
+            {1: "start", 4: "finish"},
         )
 
     def test_default_below_direction_keeps_existing_mapping(self):
@@ -2626,6 +2640,34 @@ class WledTests(unittest.TestCase):
         self.assertEqual(
             post.call_args_list[-1].kwargs["json"]["seg"]["i"],
             [0, "00CC00", 1, "663300"],
+        )
+
+    @patch("utils.requests.post")
+    def test_above_only_mapping_uses_regular_boulder_brightness(self, post):
+        post.return_value = Mock()
+        config.colors = {"start": "FF8000"}
+        shifted_holds = main.apply_hold_lighting_direction(
+            {0: "start"},
+            {
+                "r": 2,
+                "c": 1,
+                "alternating": False,
+                "position_led_ids": {0: 0, 1: 1},
+            },
+            "above",
+        )
+
+        result = utils.sendLightToBoulderwall(
+            shifted_holds,
+            boulder_brightness_percent=80,
+            above_brightness_percent=40,
+        )
+
+        self.assertEqual(shifted_holds, {1: "start"})
+        self.assertEqual(result, {101: "CC6600"})
+        self.assertEqual(
+            post.call_args_list[-1].kwargs["json"]["seg"]["i"],
+            [1, "CC6600"],
         )
 
     def test_boulder_brightness_rejects_values_outside_range(self):

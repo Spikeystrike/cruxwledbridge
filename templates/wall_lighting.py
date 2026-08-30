@@ -13,7 +13,7 @@ TRANSLATIONS = {
         "mode.boulder_brightness": "Boulder LED brightness: {value}%",
         "mode.above_brightness": "Above-hold LED brightness: {value}%",
         "direction.heading": "Hold illumination direction",
-        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. A standard grid uses the same column one row higher; an alternating grid uses the same column two rows higher. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.",
+        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. A standard grid uses the same column one row higher; an alternating grid uses the same column two rows higher. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light. The separate above-hold brightness applies only to Above and below; Above only uses the regular boulder brightness.",
         "direction.below": "Below only",
         "direction.above": "Above only",
         "direction.both": "Above and below",
@@ -41,7 +41,7 @@ TRANSLATIONS = {
         "mode.boulder_brightness": "Helligkeit der Boulder-LEDs: {value}%",
         "mode.above_brightness": "Helligkeit der LEDs oberhalb: {value}%",
         "direction.heading": "Beleuchtungsrichtung der Griffe",
-        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Im normalen Raster liegt die obere Position eine Zeile höher in derselben Spalte, im versetzten Raster zwei Zeilen höher. Ist genau diese Position abgewählt, wird der Griff von unten beleuchtet, ohne seitlich auszuweichen.",
+        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Im normalen Raster liegt die obere Position eine Zeile höher in derselben Spalte, im versetzten Raster zwei Zeilen höher. Ist genau diese Position abgewählt, wird der Griff von unten beleuchtet, ohne seitlich auszuweichen. Die separate obere Helligkeit gilt nur für Oben und unten; Nur von oben verwendet die normale Boulder-Helligkeit.",
         "direction.below": "Nur von unten",
         "direction.above": "Nur von oben",
         "direction.both": "Oben und unten",
@@ -95,6 +95,7 @@ def return_wall_lighting_html(
             .direction-options label { padding: 14px 8px; border: 2px solid transparent; border-radius: 7px; background: #6c757d; color: white; text-align: center; cursor: pointer; }
             .direction-options input:checked + label { border-color: #111; box-shadow: 0 0 0 2px white inset; background: #0069d9; }
             .brightness-control { margin-top: 24px; text-align: center; }
+            .brightness-control.is-disabled { opacity: 0.5; }
             .brightness-control label { display: block; margin-bottom: 8px; font-weight: bold; }
             .brightness-control input { width: 100%; }
             .celebration select { box-sizing: border-box; width: 100%; padding: 10px 14px; font-size: 16px; border-radius: 5px; }
@@ -130,7 +131,7 @@ def return_wall_lighting_html(
 
             <section>
                 <h2 data-i18n="direction.heading">Hold illumination direction</h2>
-                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. A standard grid uses the same column one row higher; an alternating grid uses the same column two rows higher. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.</p>
+                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. A standard grid uses the same column one row higher; an alternating grid uses the same column two rows higher. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light. The separate above-hold brightness applies only to Above and below; Above only uses the regular boulder brightness.</p>
                 <div class="direction-options">
                     <input id="direction-below" type="radio" name="hold_lighting_direction" value="below" __DIRECTION_BELOW_CHECKED__>
                     <label for="direction-below" data-i18n="direction.below">Below only</label>
@@ -139,7 +140,7 @@ def return_wall_lighting_html(
                     <input id="direction-both" type="radio" name="hold_lighting_direction" value="both" __DIRECTION_BOTH_CHECKED__>
                     <label for="direction-both" data-i18n="direction.both">Above and below</label>
                 </div>
-                <div class="brightness-control">
+                <div class="brightness-control" id="above-brightness-control">
                     <label for="above-brightness" id="above-brightness-label">Above-hold LED brightness: __ABOVE_BRIGHTNESS__%</label>
                     <input id="above-brightness" type="range" min="10" max="100" step="1" value="__ABOVE_BRIGHTNESS__">
                 </div>
@@ -172,6 +173,8 @@ def return_wall_lighting_html(
             const brightBrightnessInput = document.getElementById('bright-brightness');
             const boulderBrightnessInput = document.getElementById('boulder-brightness');
             const aboveBrightnessInput = document.getElementById('above-brightness');
+            const aboveBrightnessControl = document.getElementById('above-brightness-control');
+            const directionInputs = form.querySelectorAll('[name="hold_lighting_direction"]');
             const statusState = { kind: 'idle', message: '' };
             celebrationSelect.value = '__CELEBRATION_EFFECT__';
 
@@ -203,9 +206,18 @@ def return_wall_lighting_html(
                 }
             }
 
+            function renderAboveBrightnessAvailability() {
+                const enabled = form.elements.hold_lighting_direction.value === 'both';
+                aboveBrightnessInput.disabled = !enabled;
+                aboveBrightnessControl.classList.toggle('is-disabled', !enabled);
+            }
+
             brightBrightnessInput.addEventListener('input', renderBrightnessLabels);
             boulderBrightnessInput.addEventListener('input', renderBrightnessLabels);
             aboveBrightnessInput.addEventListener('input', renderBrightnessLabels);
+            directionInputs.forEach((input) => {
+                input.addEventListener('change', renderAboveBrightnessAvailability);
+            });
 
             form.addEventListener('submit', async (event) => {
                 event.preventDefault();
@@ -248,6 +260,7 @@ def return_wall_lighting_html(
             });
 
             renderBrightnessLabels();
+            renderAboveBrightnessAvailability();
         </script>
     </body>
     </html>

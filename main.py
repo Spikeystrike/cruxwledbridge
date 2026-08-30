@@ -270,7 +270,11 @@ def apply_hold_lighting_direction(holds, saved_settings, direction):
         if uses_below_fallback:
             fallback_holds[target_led_id] = hold_type
         else:
-            shifted_holds[target_led_id] = (hold_type, "above")
+            shifted_holds[target_led_id] = (
+                (hold_type, "above")
+                if direction == "both"
+                else hold_type
+            )
 
     # A highest hold's required below-light fallback wins if a lower hold also
     # tries to use that LED from above.
