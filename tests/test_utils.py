@@ -317,7 +317,7 @@ class AccessLoggingTests(unittest.TestCase):
             request.state.viewed_climb,
             {"id": 321, "name": "Blue Moon", "wall_id": 44},
         )
-        send_lights.assert_called_once_with({}, "dark", 20, 100)
+        send_lights.assert_called_once_with({}, "dark", 20, 100, 100)
         schedule_timeout.assert_called_once_with()
         session_local.return_value.close.assert_called_once_with()
 
@@ -329,6 +329,7 @@ class AppSettingsTests(unittest.TestCase):
         "wall_lighting_mode",
         "bright_wall_brightness_percent",
         "boulder_brightness_percent",
+        "above_brightness_percent",
         "hold_lighting_direction",
         "celebration_effect",
     )
@@ -358,6 +359,7 @@ class AppSettingsTests(unittest.TestCase):
             "wall_lighting_mode": "bright",
             "bright_wall_brightness_percent": 73,
             "boulder_brightness_percent": 42,
+            "above_brightness_percent": 58,
             "hold_lighting_direction": "both",
         }
         with patch(
@@ -373,6 +375,10 @@ class AppSettingsTests(unittest.TestCase):
                 main._load_percent_setting("boulder_brightness_percent", 100),
                 42,
             )
+            self.assertEqual(
+                main._load_percent_setting("above_brightness_percent", 100),
+                58,
+            )
             self.assertEqual(main.load_hold_lighting_direction(), "both")
 
     def test_wall_lighting_settings_survive_database_reload(self):
@@ -380,6 +386,7 @@ class AppSettingsTests(unittest.TestCase):
             "wall_lighting_mode": "bright",
             "bright_wall_brightness_percent": 34,
             "boulder_brightness_percent": 76,
+            "above_brightness_percent": 64,
             "hold_lighting_direction": "above",
             "celebration_effect": "fireworks",
         })
@@ -392,6 +399,10 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(
             main._load_percent_setting("boulder_brightness_percent", 100),
             76,
+        )
+        self.assertEqual(
+            main._load_percent_setting("above_brightness_percent", 100),
+            64,
         )
         self.assertEqual(main.load_hold_lighting_direction(), "above")
         self.assertEqual(main.load_celebration_effect(), "fireworks")
@@ -410,6 +421,7 @@ class CelebrationTests(unittest.TestCase):
         self.original_mode = main.wall_lighting_mode
         self.original_brightness = main.bright_wall_brightness_percent
         self.original_boulder_brightness = main.boulder_brightness_percent
+        self.original_above_brightness = main.above_brightness_percent
         self.original_generation = main._celebration_generation
         self.original_active = main._celebration_active
         self.original_route_active = main._route_lighting_active
@@ -425,6 +437,7 @@ class CelebrationTests(unittest.TestCase):
         main.wall_lighting_mode = self.original_mode
         main.bright_wall_brightness_percent = self.original_brightness
         main.boulder_brightness_percent = self.original_boulder_brightness
+        main.above_brightness_percent = self.original_above_brightness
         main._celebration_generation = self.original_generation
         main._celebration_active = self.original_active
         main._route_lighting_active = self.original_route_active
@@ -514,13 +527,20 @@ class CelebrationTests(unittest.TestCase):
         main.wall_lighting_mode = "bright"
         main.bright_wall_brightness_percent = 65
         main.boulder_brightness_percent = 70
+        main.above_brightness_percent = 55
         main._celebration_generation = 8
         main._celebration_active = True
 
         asyncio.run(main._run_celebration("rainbow", 8))
 
         play_effect.assert_called_once_with("rainbow")
-        send_lights.assert_called_once_with({1: "finish"}, "bright", 65, 70)
+        send_lights.assert_called_once_with(
+            {1: "finish"},
+            "bright",
+            65,
+            70,
+            55,
+        )
         schedule_timeout.assert_called_once_with()
         self.assertEqual(main.current_wall_holds, {1: "finish"})
         self.assertIsNone(main._pending_viewed_holds)
@@ -621,6 +641,7 @@ class EnergySavingTests(unittest.TestCase):
         self.original_celebration_active = main._celebration_active
         self.original_brightness = main.bright_wall_brightness_percent
         self.original_boulder_brightness = main.boulder_brightness_percent
+        self.original_above_brightness = main.above_brightness_percent
         main._route_timeout_task = None
         main._route_timeout_sleep_task = None
         main._route_timeout_generation = 0
@@ -637,6 +658,7 @@ class EnergySavingTests(unittest.TestCase):
         main._celebration_active = self.original_celebration_active
         main.bright_wall_brightness_percent = self.original_brightness
         main.boulder_brightness_percent = self.original_boulder_brightness
+        main.above_brightness_percent = self.original_above_brightness
 
     def test_route_timeout_is_persisted_in_database(self):
         db = main.SessionLocal()
@@ -704,10 +726,11 @@ class EnergySavingTests(unittest.TestCase):
         main._route_lighting_active = True
         main.bright_wall_brightness_percent = 65
         main.boulder_brightness_percent = 70
+        main.above_brightness_percent = 55
 
         asyncio.run(main._run_route_timeout(0, 7))
 
-        send_lights.assert_called_once_with({}, "dark", 65, 70)
+        send_lights.assert_called_once_with({}, "dark", 65, 70, 55)
         self.assertFalse(main._route_lighting_active)
 
     @patch("main.sendLightToBoulderwall")
@@ -1642,6 +1665,7 @@ class PathPrefixTests(unittest.TestCase):
             "bright",
             45,
             "both",
+            55,
         )
 
         self.assertIn("fetch('/cruxwledbridge/wall_lighting_settings'", html)
@@ -1651,9 +1675,10 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("Wandbeleuchtungs-Einstellungen", html)
         self.assertIn("Dunkel – nur Boulder", html)
         self.assertIn("Hell – freie LEDs gedimmt", html)
-        self.assertEqual(html.count('type="range" min="10" max="100"'), 2)
+        self.assertEqual(html.count('type="range" min="10" max="100"'), 3)
         self.assertIn('value="65"', html)
         self.assertIn('value="45"', html)
+        self.assertIn('value="55"', html)
         self.assertIn('name="mode" value="bright" checked', html)
         self.assertIn(
             "bright_brightness_percent: Number(brightBrightnessInput.value)",
@@ -1664,13 +1689,18 @@ class PathPrefixTests(unittest.TestCase):
             html,
         )
         self.assertIn(
+            "above_brightness_percent: Number(aboveBrightnessInput.value)",
+            html,
+        )
+        self.assertIn(
             "hold_lighting_direction: form.elements.hold_lighting_direction.value",
             html,
         )
         self.assertIn('name="hold_lighting_direction" value="both" checked', html)
-        self.assertIn("genau eine Reihe höher in derselben Spalte", html)
+        self.assertIn("aus der direkt höheren Rasterzeile bestimmt", html)
         self.assertIn("Helligkeit freier LEDs: {value}%", html)
         self.assertIn("Helligkeit der Boulder-LEDs: {value}%", html)
+        self.assertIn("Helligkeit der LEDs oberhalb: {value}%", html)
         self.assertEqual(html.count('id="save-settings"'), 1)
         self.assertGreater(
             html.index('id="save-settings"'),
@@ -1771,6 +1801,7 @@ class PathPrefixTests(unittest.TestCase):
             main.wall_lighting_mode,
             main.bright_wall_brightness_percent,
             main.boulder_brightness_percent,
+            main.above_brightness_percent,
             main.celebration_effect,
             main.hold_lighting_direction,
         )
@@ -1781,6 +1812,7 @@ class PathPrefixTests(unittest.TestCase):
                         mode="bright",
                         bright_brightness_percent=35,
                         boulder_brightness_percent=70,
+                        above_brightness_percent=60,
                         celebration_effect="pride",
                         hold_lighting_direction="above",
                     )
@@ -1790,6 +1822,7 @@ class PathPrefixTests(unittest.TestCase):
                 "wall_lighting_mode": "bright",
                 "bright_wall_brightness_percent": 35,
                 "boulder_brightness_percent": 70,
+                "above_brightness_percent": 60,
                 "celebration_effect": "pride",
                 "hold_lighting_direction": "above",
             })
@@ -1798,12 +1831,14 @@ class PathPrefixTests(unittest.TestCase):
                 "mode": "bright",
                 "bright_brightness_percent": 35,
                 "boulder_brightness_percent": 70,
+                "above_brightness_percent": 60,
                 "celebration_effect": "pride",
                 "hold_lighting_direction": "above",
             })
             self.assertEqual(main.wall_lighting_mode, "bright")
             self.assertEqual(main.bright_wall_brightness_percent, 35)
             self.assertEqual(main.boulder_brightness_percent, 70)
+            self.assertEqual(main.above_brightness_percent, 60)
             self.assertEqual(main.celebration_effect, "pride")
             self.assertEqual(main.hold_lighting_direction, "above")
         finally:
@@ -1811,6 +1846,7 @@ class PathPrefixTests(unittest.TestCase):
                 main.wall_lighting_mode,
                 main.bright_wall_brightness_percent,
                 main.boulder_brightness_percent,
+                main.above_brightness_percent,
                 main.celebration_effect,
                 main.hold_lighting_direction,
             ) = original_values
@@ -1841,6 +1877,15 @@ class PathPrefixTests(unittest.TestCase):
                         mode="bright",
                         bright_brightness_percent=50,
                         boulder_brightness_percent=brightness,
+                        celebration_effect="rainbow",
+                    )
+
+                with self.assertRaises(ValueError):
+                    main.WallLightingSettings(
+                        mode="bright",
+                        bright_brightness_percent=50,
+                        boulder_brightness_percent=100,
+                        above_brightness_percent=brightness,
                         celebration_effect="rainbow",
                     )
 
@@ -2209,7 +2254,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 self.saved_settings,
                 "above",
             ),
-            {1: "start", 2: "finish"},
+            {1: ("start", "above"), 2: ("finish", "above")},
         )
 
     def test_both_direction_keeps_lights_above_and_below(self):
@@ -2219,7 +2264,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 self.saved_settings,
                 "both",
             ),
-            {0: "start", 1: "start"},
+            {0: "start", 1: ("start", "above")},
         )
 
     def test_highest_hold_always_uses_its_below_light(self):
@@ -2277,6 +2322,109 @@ class HoldLightingDirectionTests(unittest.TestCase):
             {10: "start"},
         )
 
+    def test_above_direction_supports_offset_rows(self):
+        positions = utils.generate_grid(
+            (0, 0),
+            (20, 0),
+            (20, 10),
+            (0, 10),
+            2,
+            3,
+            alternating=True,
+            alternating_start_column=0,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        layout = utils.generate_grid_position_layout(
+            2,
+            3,
+            alternating=True,
+            alternating_start_column=0,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        source_position = next(
+            position_id
+            for position_id, coordinates in layout.items()
+            if coordinates == (1, 1)
+        )
+        saved_settings = {
+            "r": 2,
+            "c": 3,
+            "alternating": True,
+            "alternating_start_column": 0,
+            "led_start_corner": "bottom_left",
+            "led_direction": "vertical",
+            "positions": positions,
+            "position_led_ids": {
+                position_id: position_id
+                for position_id in layout
+            },
+        }
+
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {source_position: "start"},
+                saved_settings,
+                "above",
+            ),
+            {0: ("start", "above")},
+        )
+
+    def test_offset_row_does_not_substitute_an_active_side_light(self):
+        positions = utils.generate_grid(
+            (0, 0),
+            (20, 0),
+            (20, 10),
+            (0, 10),
+            2,
+            4,
+            alternating=True,
+            alternating_start_column=0,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        layout = utils.generate_grid_position_layout(
+            2,
+            4,
+            alternating=True,
+            alternating_start_column=0,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        position_ids = {
+            coordinates: position_id
+            for position_id, coordinates in layout.items()
+        }
+        source_position = position_ids[(1, 1)]
+        lateral_position = position_ids[(0, 0)]
+        intended_position = position_ids[(0, 2)]
+        saved_settings = {
+            "r": 2,
+            "c": 4,
+            "alternating": True,
+            "alternating_start_column": 0,
+            "led_start_corner": "bottom_left",
+            "led_direction": "vertical",
+            "positions": positions,
+            # The intended upper position is disabled. The remaining LED in
+            # that row is lateral and must not replace the below fallback.
+            "position_led_ids": {
+                source_position: 10,
+                lateral_position: 11,
+            },
+            "excluded_position_ids": [intended_position],
+        }
+
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {10: "start"},
+                saved_settings,
+                "above",
+            ),
+            {10: "start"},
+        )
+
     def test_above_direction_never_skips_over_an_excluded_row(self):
         saved_settings = {
             **self.saved_settings,
@@ -2304,7 +2452,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 {"grids": [self.saved_settings, second_grid]},
                 "above",
             ),
-            {1: "start", 4: "finish"},
+            {1: ("start", "above"), 4: ("finish", "above")},
         )
 
     def test_default_below_direction_keeps_existing_mapping(self):
@@ -2419,6 +2567,23 @@ class WledTests(unittest.TestCase):
             [0, "333333", 1, "804000", 2, "333333"],
         )
 
+    @patch("utils.requests.post")
+    def test_above_brightness_scales_only_tagged_upper_lights(self, post):
+        post.return_value = Mock()
+        config.colors = {"start": "FF8000", "finish": "00FF00"}
+
+        result = utils.sendLightToBoulderwall(
+            {0: "finish", 1: ("start", "above")},
+            boulder_brightness_percent=80,
+            above_brightness_percent=40,
+        )
+
+        self.assertEqual(result, {100: "00CC00", 101: "663300"})
+        self.assertEqual(
+            post.call_args_list[-1].kwargs["json"]["seg"]["i"],
+            [0, "00CC00", 1, "663300"],
+        )
+
     def test_boulder_brightness_rejects_values_outside_range(self):
         for brightness in (9, 101):
             with self.subTest(brightness=brightness):
@@ -2426,6 +2591,15 @@ class WledTests(unittest.TestCase):
                     utils.sendLightToBoulderwall(
                         {1: "start"},
                         boulder_brightness_percent=brightness,
+                    )
+
+    def test_above_brightness_rejects_values_outside_range(self):
+        for brightness in (9, 101):
+            with self.subTest(brightness=brightness):
+                with self.assertRaisesRegex(ValueError, "Above-hold brightness"):
+                    utils.sendLightToBoulderwall(
+                        {1: ("start", "above")},
+                        above_brightness_percent=brightness,
                     )
 
     @patch("utils.requests.post")

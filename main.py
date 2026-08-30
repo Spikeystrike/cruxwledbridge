@@ -183,7 +183,7 @@ def persist_route_timeout_minutes(minutes):
 
 
 def _above_led_mapping(saved_settings):
-    """Map each logical hold LED to the active LED directly above it."""
+    """Map each logical hold LED to its intended position one row above."""
     if not isinstance(saved_settings, dict):
         return {}
 
@@ -220,19 +220,52 @@ def _above_led_mapping(saved_settings):
         except (KeyError, TypeError, ValueError):
             continue
 
+        raw_positions = saved_grid.get("positions", {})
+        if not isinstance(raw_positions, dict):
+            raw_positions = {}
+        positions = {}
+        for position_id, coordinates in raw_positions.items():
+            try:
+                x, y = coordinates
+                positions[int(position_id)] = (float(x), float(y))
+            except (TypeError, ValueError):
+                continue
+
         active_positions = set(position_led_ids).intersection(layout)
-        position_by_coordinates = {
-            layout[position_id]: position_id
-            for position_id in active_positions
-        }
         for position_id in active_positions:
             led_id = position_led_ids[position_id]
             row, column = layout[position_id]
-            target_position_id = position_by_coordinates.get((row - 1, column))
-            if target_position_id is None:
-                # Only the exact position one row higher counts as "above".
-                # If it is missing or excluded, use the hold's own below LED;
-                # never select a lateral LED or search another row higher.
+            candidates = [
+                candidate_id
+                for candidate_id, (candidate_row, _)
+                in layout.items()
+                if candidate_row == row - 1
+            ]
+            if not candidates:
+                above_leds[led_id] = (led_id, True)
+                continue
+
+            source_coordinates = positions.get(position_id)
+
+            def candidate_distance(candidate_id):
+                candidate_coordinates = positions.get(candidate_id)
+                candidate_column = layout[candidate_id][1]
+                column_distance = abs(column - candidate_column)
+                if source_coordinates and candidate_coordinates:
+                    x_distance = abs(
+                        source_coordinates[0] - candidate_coordinates[0]
+                    )
+                    y_distance = abs(
+                        source_coordinates[1] - candidate_coordinates[1]
+                    )
+                    return x_distance, y_distance, column_distance, candidate_id
+                return column_distance, 0, column_distance, candidate_id
+
+            # Pick the geometrically intended position from the complete row,
+            # including excluded positions. Only then check whether that exact
+            # position owns an LED; never substitute another active neighbour.
+            target_position_id = min(candidates, key=candidate_distance)
+            if target_position_id not in active_positions:
                 above_leds[led_id] = (led_id, True)
                 continue
             above_leds[led_id] = (
@@ -259,8 +292,10 @@ def apply_hold_lighting_direction(holds, saved_settings, direction):
             led_id,
             (led_id, True),
         )
-        target = fallback_holds if uses_below_fallback else shifted_holds
-        target[target_led_id] = hold_type
+        if uses_below_fallback:
+            fallback_holds[target_led_id] = hold_type
+        else:
+            shifted_holds[target_led_id] = (hold_type, "above")
 
     # A highest hold's required below-light fallback wins if a lower hold also
     # tries to use that LED from above.
@@ -281,6 +316,10 @@ bright_wall_brightness_percent = _load_percent_setting(
 )
 boulder_brightness_percent = _load_percent_setting(
     "boulder_brightness_percent",
+    100,
+)
+above_brightness_percent = _load_percent_setting(
+    "above_brightness_percent",
     100,
 )
 hold_lighting_direction = load_hold_lighting_direction()
@@ -339,6 +378,7 @@ async def _run_route_timeout(delay_seconds, generation):
                 "dark",
                 bright_wall_brightness_percent,
                 boulder_brightness_percent,
+                above_brightness_percent,
             )
     except asyncio.CancelledError:
         return
@@ -375,6 +415,7 @@ async def _restore_current_wall():
             wall_lighting_mode,
             bright_wall_brightness_percent,
             boulder_brightness_percent,
+            above_brightness_percent,
         )
         schedule_route_timeout()
     else:
@@ -384,6 +425,7 @@ async def _restore_current_wall():
             "dark",
             bright_wall_brightness_percent,
             boulder_brightness_percent,
+            above_brightness_percent,
         )
 
 
@@ -548,6 +590,11 @@ class WallLightingSettings(BaseModel):
     boulder_brightness_percent: int = Field(ge=10, le=100)
     celebration_effect: str
     hold_lighting_direction: Optional[str] = None
+    above_brightness_percent: Optional[int] = Field(
+        default=None,
+        ge=10,
+        le=100,
+    )
 
 
 class EnergySavingSettings(BaseModel):
@@ -708,6 +755,7 @@ async def viewed(payload: PayL, request: Request):
                     wall_lighting_mode,
                     bright_wall_brightness_percent,
                     boulder_brightness_percent,
+                    above_brightness_percent,
                 )
                 _route_lighting_active = True
                 schedule_route_timeout()
@@ -759,7 +807,8 @@ async def set_wall_lighting_mode(payload: WallLightingMode):
 @app.post("/wall_lighting_settings")
 async def set_wall_lighting_settings(payload: WallLightingSettings):
     global wall_lighting_mode, bright_wall_brightness_percent
-    global boulder_brightness_percent, celebration_effect, hold_lighting_direction
+    global boulder_brightness_percent, above_brightness_percent
+    global celebration_effect, hold_lighting_direction
     global _celebration_active, _celebration_generation
 
     if payload.mode not in {"dark", "bright"}:
@@ -775,6 +824,11 @@ async def set_wall_lighting_settings(payload: WallLightingSettings):
     new_hold_lighting_direction = (
         payload.hold_lighting_direction or hold_lighting_direction
     )
+    new_above_brightness_percent = (
+        payload.above_brightness_percent
+        if payload.above_brightness_percent is not None
+        else above_brightness_percent
+    )
     if new_hold_lighting_direction not in HOLD_LIGHTING_DIRECTIONS:
         return JSONResponse(
             status_code=400,
@@ -785,12 +839,14 @@ async def set_wall_lighting_settings(payload: WallLightingSettings):
         "wall_lighting_mode": payload.mode,
         "bright_wall_brightness_percent": payload.bright_brightness_percent,
         "boulder_brightness_percent": payload.boulder_brightness_percent,
+        "above_brightness_percent": new_above_brightness_percent,
         "celebration_effect": payload.celebration_effect,
         "hold_lighting_direction": new_hold_lighting_direction,
     })
     wall_lighting_mode = payload.mode
     bright_wall_brightness_percent = payload.bright_brightness_percent
     boulder_brightness_percent = payload.boulder_brightness_percent
+    above_brightness_percent = new_above_brightness_percent
     celebration_effect = payload.celebration_effect
     hold_lighting_direction = new_hold_lighting_direction
 
@@ -805,6 +861,7 @@ async def set_wall_lighting_settings(payload: WallLightingSettings):
         "mode": wall_lighting_mode,
         "bright_brightness_percent": bright_wall_brightness_percent,
         "boulder_brightness_percent": boulder_brightness_percent,
+        "above_brightness_percent": above_brightness_percent,
         "celebration_effect": celebration_effect,
         "hold_lighting_direction": hold_lighting_direction,
     }
@@ -840,6 +897,7 @@ async def get_wall_lighting():
         wall_lighting_mode,
         boulder_brightness_percent,
         hold_lighting_direction,
+        above_brightness_percent,
     )
     return HTMLResponse(content=html_content)
 

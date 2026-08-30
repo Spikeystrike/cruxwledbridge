@@ -338,22 +338,35 @@ def sendLightToBoulderwall(
     mode="dark",
     bright_brightness_percent=20,
     boulder_brightness_percent=100,
+    above_brightness_percent=100,
 ):
     if not 10 <= bright_brightness_percent <= 100:
         raise ValueError("Bright wall brightness must be between 10 and 100 percent")
     if not 10 <= boulder_brightness_percent <= 100:
         raise ValueError("Boulder brightness must be between 10 and 100 percent")
+    if not 10 <= above_brightness_percent <= 100:
+        raise ValueError("Above-hold brightness must be between 10 and 100 percent")
 
     colors = config.colors
     hole2LEDS = config.hole2LEDS
     bright_channel = round(255 * bright_brightness_percent / 100)
     bright_background_color = f"{bright_channel:02X}" * 3
     led = {}
-    for hole_id, hold_type in holds.items():
+    for hole_id, hold_value in holds.items():
+        if (
+            isinstance(hold_value, (list, tuple))
+            and len(hold_value) == 2
+            and hold_value[1] == "above"
+        ):
+            hold_type = hold_value[0]
+            brightness_percent = above_brightness_percent
+        else:
+            hold_type = hold_value
+            brightness_percent = boulder_brightness_percent
         for physical_led_id in hole2LEDS[hole_id]:
             led[physical_led_id] = _scale_hex_color(
                 colors[hold_type],
-                boulder_brightness_percent,
+                brightness_percent,
             )
 
     controllers = _wled_controllers()

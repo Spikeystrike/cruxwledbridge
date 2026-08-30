@@ -11,8 +11,9 @@ TRANSLATIONS = {
         "mode.bright_button": "Bright – dim unused LEDs",
         "mode.background_brightness": "Unused LED brightness: {value}%",
         "mode.boulder_brightness": "Boulder LED brightness: {value}%",
+        "mode.above_brightness": "Above-hold LED brightness: {value}%",
         "direction.heading": "Hold illumination direction",
-        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. Only an active light directly one row above in the same column counts; otherwise the hold is illuminated from below.",
+        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. The intended position is selected from the immediately higher grid row. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.",
         "direction.below": "Below only",
         "direction.above": "Above only",
         "direction.both": "Above and below",
@@ -38,8 +39,9 @@ TRANSLATIONS = {
         "mode.bright_button": "Hell – freie LEDs gedimmt",
         "mode.background_brightness": "Helligkeit freier LEDs: {value}%",
         "mode.boulder_brightness": "Helligkeit der Boulder-LEDs: {value}%",
+        "mode.above_brightness": "Helligkeit der LEDs oberhalb: {value}%",
         "direction.heading": "Beleuchtungsrichtung der Griffe",
-        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Nur eine aktive Beleuchtung genau eine Reihe höher in derselben Spalte zählt; andernfalls wird der Griff von unten beleuchtet.",
+        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Die vorgesehene Position wird aus der direkt höheren Rasterzeile bestimmt. Ist genau diese Position abgewählt, wird der Griff von unten beleuchtet, ohne seitlich auszuweichen.",
         "direction.below": "Nur von unten",
         "direction.above": "Nur von oben",
         "direction.both": "Oben und unten",
@@ -66,6 +68,7 @@ def return_wall_lighting_html(
     wall_lighting_mode="dark",
     boulder_brightness_percent=100,
     hold_lighting_direction="below",
+    above_brightness_percent=100,
 ):
     language_switch = language_switch_html(TRANSLATIONS)
     html = """
@@ -127,7 +130,7 @@ def return_wall_lighting_html(
 
             <section>
                 <h2 data-i18n="direction.heading">Hold illumination direction</h2>
-                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. Only an active light directly one row above in the same column counts; otherwise the hold is illuminated from below.</p>
+                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. The intended position is selected from the immediately higher grid row. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.</p>
                 <div class="direction-options">
                     <input id="direction-below" type="radio" name="hold_lighting_direction" value="below" __DIRECTION_BELOW_CHECKED__>
                     <label for="direction-below" data-i18n="direction.below">Below only</label>
@@ -135,6 +138,10 @@ def return_wall_lighting_html(
                     <label for="direction-above" data-i18n="direction.above">Above only</label>
                     <input id="direction-both" type="radio" name="hold_lighting_direction" value="both" __DIRECTION_BOTH_CHECKED__>
                     <label for="direction-both" data-i18n="direction.both">Above and below</label>
+                </div>
+                <div class="brightness-control">
+                    <label for="above-brightness" id="above-brightness-label">Above-hold LED brightness: __ABOVE_BRIGHTNESS__%</label>
+                    <input id="above-brightness" type="range" min="10" max="100" step="1" value="__ABOVE_BRIGHTNESS__">
                 </div>
             </section>
 
@@ -164,6 +171,7 @@ def return_wall_lighting_html(
             const celebrationSelect = document.getElementById('celebration-effect');
             const brightBrightnessInput = document.getElementById('bright-brightness');
             const boulderBrightnessInput = document.getElementById('boulder-brightness');
+            const aboveBrightnessInput = document.getElementById('above-brightness');
             const statusState = { kind: 'idle', message: '' };
             celebrationSelect.value = '__CELEBRATION_EFFECT__';
 
@@ -175,6 +183,10 @@ def return_wall_lighting_html(
                 document.getElementById('boulder-brightness-label').textContent = window.cruxI18n.t(
                     'mode.boulder_brightness',
                     { value: boulderBrightnessInput.value },
+                );
+                document.getElementById('above-brightness-label').textContent = window.cruxI18n.t(
+                    'mode.above_brightness',
+                    { value: aboveBrightnessInput.value },
                 );
             }
 
@@ -193,6 +205,7 @@ def return_wall_lighting_html(
 
             brightBrightnessInput.addEventListener('input', renderBrightnessLabels);
             boulderBrightnessInput.addEventListener('input', renderBrightnessLabels);
+            aboveBrightnessInput.addEventListener('input', renderBrightnessLabels);
 
             form.addEventListener('submit', async (event) => {
                 event.preventDefault();
@@ -208,6 +221,7 @@ def return_wall_lighting_html(
                             mode: form.elements.mode.value,
                             bright_brightness_percent: Number(brightBrightnessInput.value),
                             boulder_brightness_percent: Number(boulderBrightnessInput.value),
+                            above_brightness_percent: Number(aboveBrightnessInput.value),
                             hold_lighting_direction: form.elements.hold_lighting_direction.value,
                             celebration_effect: celebrationSelect.value,
                         }),
@@ -243,6 +257,7 @@ def return_wall_lighting_html(
         .replace("__CELEBRATION_EFFECT__", celebration_effect)
         .replace("__BRIGHT_BRIGHTNESS__", str(bright_brightness_percent))
         .replace("__BOULDER_BRIGHTNESS__", str(boulder_brightness_percent))
+        .replace("__ABOVE_BRIGHTNESS__", str(above_brightness_percent))
         .replace("__DARK_CHECKED__", "checked" if wall_lighting_mode == "dark" else "")
         .replace("__BRIGHT_CHECKED__", "checked" if wall_lighting_mode == "bright" else "")
         .replace("__DIRECTION_BELOW_CHECKED__", "checked" if hold_lighting_direction == "below" else "")
