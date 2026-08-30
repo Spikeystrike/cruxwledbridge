@@ -183,7 +183,7 @@ def persist_route_timeout_minutes(minutes):
 
 
 def _above_led_mapping(saved_settings):
-    """Map each logical hold LED to its intended position one row above."""
+    """Map each logical hold LED to the next position in its grid column."""
     if not isinstance(saved_settings, dict):
         return {}
 
@@ -199,10 +199,11 @@ def _above_led_mapping(saved_settings):
         if not isinstance(raw_position_led_ids, dict):
             continue
         try:
+            alternating = bool(saved_grid.get("alternating", False))
             layout = generate_grid_position_layout(
                 int(saved_grid["r"]),
                 int(saved_grid["c"]),
-                alternating=bool(saved_grid.get("alternating", False)),
+                alternating=alternating,
                 alternating_start_column=int(
                     saved_grid.get("alternating_start_column", 0)
                 ),
@@ -220,52 +221,26 @@ def _above_led_mapping(saved_settings):
         except (KeyError, TypeError, ValueError):
             continue
 
-        raw_positions = saved_grid.get("positions", {})
-        if not isinstance(raw_positions, dict):
-            raw_positions = {}
-        positions = {}
-        for position_id, coordinates in raw_positions.items():
-            try:
-                x, y = coordinates
-                positions[int(position_id)] = (float(x), float(y))
-            except (TypeError, ValueError):
-                continue
-
         active_positions = set(position_led_ids).intersection(layout)
+        position_by_coordinates = {
+            coordinates: position_id
+            for position_id, coordinates in layout.items()
+        }
+        row_step = 2 if alternating else 1
         for position_id in active_positions:
             led_id = position_led_ids[position_id]
             row, column = layout[position_id]
-            candidates = [
-                candidate_id
-                for candidate_id, (candidate_row, _)
-                in layout.items()
-                if candidate_row == row - 1
-            ]
-            if not candidates:
-                above_leds[led_id] = (led_id, True)
-                continue
-
-            source_coordinates = positions.get(position_id)
-
-            def candidate_distance(candidate_id):
-                candidate_coordinates = positions.get(candidate_id)
-                candidate_column = layout[candidate_id][1]
-                column_distance = abs(column - candidate_column)
-                if source_coordinates and candidate_coordinates:
-                    x_distance = abs(
-                        source_coordinates[0] - candidate_coordinates[0]
-                    )
-                    y_distance = abs(
-                        source_coordinates[1] - candidate_coordinates[1]
-                    )
-                    return x_distance, y_distance, column_distance, candidate_id
-                return column_distance, 0, column_distance, candidate_id
-
-            # Pick the geometrically intended position from the complete row,
-            # including excluded positions. Only then check whether that exact
-            # position owns an LED; never substitute another active neighbour.
-            target_position_id = min(candidates, key=candidate_distance)
-            if target_position_id not in active_positions:
+            target_position_id = position_by_coordinates.get(
+                (row - row_step, column)
+            )
+            if (
+                target_position_id is None
+                or target_position_id not in active_positions
+            ):
+                # Alternating rows contain opposite column parities. Their
+                # vertically aligned position is therefore two rows higher.
+                # If that exact position is absent or excluded, retain the
+                # below light instead of using a lateral or more distant LED.
                 above_leds[led_id] = (led_id, True)
                 continue
             above_leds[led_id] = (

@@ -1697,7 +1697,7 @@ class PathPrefixTests(unittest.TestCase):
             html,
         )
         self.assertIn('name="hold_lighting_direction" value="both" checked', html)
-        self.assertIn("aus der direkt höheren Rasterzeile bestimmt", html)
+        self.assertIn("im versetzten Raster zwei Zeilen höher", html)
         self.assertIn("Helligkeit freier LEDs: {value}%", html)
         self.assertIn("Helligkeit der Boulder-LEDs: {value}%", html)
         self.assertIn("Helligkeit der LEDs oberhalb: {value}%", html)
@@ -2322,13 +2322,13 @@ class HoldLightingDirectionTests(unittest.TestCase):
             {10: "start"},
         )
 
-    def test_above_direction_supports_offset_rows(self):
+    def test_above_direction_uses_same_column_two_offset_rows_higher(self):
         positions = utils.generate_grid(
             (0, 0),
             (20, 0),
-            (20, 10),
-            (0, 10),
-            2,
+            (20, 20),
+            (0, 20),
+            3,
             3,
             alternating=True,
             alternating_start_column=0,
@@ -2336,7 +2336,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
             led_direction="vertical",
         )
         layout = utils.generate_grid_position_layout(
-            2,
+            3,
             3,
             alternating=True,
             alternating_start_column=0,
@@ -2346,10 +2346,15 @@ class HoldLightingDirectionTests(unittest.TestCase):
         source_position = next(
             position_id
             for position_id, coordinates in layout.items()
-            if coordinates == (1, 1)
+            if coordinates == (2, 0)
+        )
+        target_position = next(
+            position_id
+            for position_id, coordinates in layout.items()
+            if coordinates == (0, 0)
         )
         saved_settings = {
-            "r": 2,
+            "r": 3,
             "c": 3,
             "alternating": True,
             "alternating_start_column": 0,
@@ -2368,16 +2373,16 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 saved_settings,
                 "above",
             ),
-            {0: ("start", "above")},
+            {target_position: ("start", "above")},
         )
 
-    def test_offset_row_does_not_substitute_an_active_side_light(self):
+    def test_upper_offset_row_falls_back_instead_of_using_side_light(self):
         positions = utils.generate_grid(
             (0, 0),
             (20, 0),
-            (20, 10),
-            (0, 10),
-            2,
+            (20, 20),
+            (0, 20),
+            3,
             4,
             alternating=True,
             alternating_start_column=0,
@@ -2385,7 +2390,7 @@ class HoldLightingDirectionTests(unittest.TestCase):
             led_direction="vertical",
         )
         layout = utils.generate_grid_position_layout(
-            2,
+            3,
             4,
             alternating=True,
             alternating_start_column=0,
@@ -2398,20 +2403,59 @@ class HoldLightingDirectionTests(unittest.TestCase):
         }
         source_position = position_ids[(1, 1)]
         lateral_position = position_ids[(0, 0)]
-        intended_position = position_ids[(0, 2)]
         saved_settings = {
-            "r": 2,
+            "r": 3,
             "c": 4,
             "alternating": True,
             "alternating_start_column": 0,
             "led_start_corner": "bottom_left",
             "led_direction": "vertical",
             "positions": positions,
-            # The intended upper position is disabled. The remaining LED in
-            # that row is lateral and must not replace the below fallback.
             "position_led_ids": {
                 source_position: 10,
                 lateral_position: 11,
+            },
+        }
+
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {10: "start"},
+                saved_settings,
+                "above",
+            ),
+            {10: "start"},
+        )
+
+    def test_excluded_two_rows_higher_offset_position_falls_back_below(self):
+        layout = utils.generate_grid_position_layout(
+            3,
+            4,
+            alternating=True,
+            alternating_start_column=0,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        position_ids = {
+            coordinates: position_id
+            for position_id, coordinates in layout.items()
+        }
+        source_position = position_ids[(2, 0)]
+        intended_position = position_ids[(0, 0)]
+        intervening_side_position = position_ids[(1, 1)]
+        upper_side_position = position_ids[(0, 2)]
+        saved_settings = {
+            "r": 3,
+            "c": 4,
+            "alternating": True,
+            "alternating_start_column": 0,
+            "led_start_corner": "bottom_left",
+            "led_direction": "vertical",
+            # Both possible sideways distractions stay active, while the
+            # structurally exact position two rows higher is disabled.
+            "position_led_ids": {
+                source_position: 10,
+                intervening_side_position: 11,
+                upper_side_position: 12,
             },
             "excluded_position_ids": [intended_position],
         }

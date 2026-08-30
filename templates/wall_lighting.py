@@ -13,7 +13,7 @@ TRANSLATIONS = {
         "mode.boulder_brightness": "Boulder LED brightness: {value}%",
         "mode.above_brightness": "Above-hold LED brightness: {value}%",
         "direction.heading": "Hold illumination direction",
-        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. The intended position is selected from the immediately higher grid row. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.",
+        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. A standard grid uses the same column one row higher; an alternating grid uses the same column two rows higher. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.",
         "direction.below": "Below only",
         "direction.above": "Above only",
         "direction.both": "Above and below",
@@ -41,7 +41,7 @@ TRANSLATIONS = {
         "mode.boulder_brightness": "Helligkeit der Boulder-LEDs: {value}%",
         "mode.above_brightness": "Helligkeit der LEDs oberhalb: {value}%",
         "direction.heading": "Beleuchtungsrichtung der Griffe",
-        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Die vorgesehene Position wird aus der direkt höheren Rasterzeile bestimmt. Ist genau diese Position abgewählt, wird der Griff von unten beleuchtet, ohne seitlich auszuweichen.",
+        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Im normalen Raster liegt die obere Position eine Zeile höher in derselben Spalte, im versetzten Raster zwei Zeilen höher. Ist genau diese Position abgewählt, wird der Griff von unten beleuchtet, ohne seitlich auszuweichen.",
         "direction.below": "Nur von unten",
         "direction.above": "Nur von oben",
         "direction.both": "Oben und unten",
@@ -130,7 +130,7 @@ def return_wall_lighting_html(
 
             <section>
                 <h2 data-i18n="direction.heading">Hold illumination direction</h2>
-                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. The intended position is selected from the immediately higher grid row. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.</p>
+                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. A standard grid uses the same column one row higher; an alternating grid uses the same column two rows higher. If that exact position is disabled, the hold is illuminated from below instead of using another lateral light.</p>
                 <div class="direction-options">
                     <input id="direction-below" type="radio" name="hold_lighting_direction" value="below" __DIRECTION_BELOW_CHECKED__>
                     <label for="direction-below" data-i18n="direction.below">Below only</label>
