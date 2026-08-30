@@ -183,7 +183,7 @@ def persist_route_timeout_minutes(minutes):
 
 
 def _above_led_mapping(saved_settings):
-    """Map each logical hold LED to the LED directly above it."""
+    """Map each logical hold LED to the active LED directly above it."""
     if not isinstance(saved_settings, dict):
         return {}
 
@@ -220,46 +220,21 @@ def _above_led_mapping(saved_settings):
         except (KeyError, TypeError, ValueError):
             continue
 
-        raw_positions = saved_grid.get("positions", {})
-        if not isinstance(raw_positions, dict):
-            raw_positions = {}
-        positions = {}
-        for position_id, coordinates in raw_positions.items():
-            try:
-                x, y = coordinates
-                positions[int(position_id)] = (float(x), float(y))
-            except (TypeError, ValueError):
-                continue
-
         active_positions = set(position_led_ids).intersection(layout)
+        position_by_coordinates = {
+            layout[position_id]: position_id
+            for position_id in active_positions
+        }
         for position_id in active_positions:
             led_id = position_led_ids[position_id]
             row, column = layout[position_id]
-            candidates = [
-                candidate_id
-                for candidate_id in active_positions
-                if layout[candidate_id][0] == row - 1
-            ]
-            if not candidates:
-                # No LED exists above the highest active hold. Its own LED is
-                # below the hold and is therefore the required fallback.
+            target_position_id = position_by_coordinates.get((row - 1, column))
+            if target_position_id is None:
+                # Only the exact position one row higher counts as "above".
+                # If it is missing or excluded, use the hold's own below LED;
+                # never select a lateral LED or search another row higher.
                 above_leds[led_id] = (led_id, True)
                 continue
-
-            source_coordinates = positions.get(position_id)
-
-            def candidate_distance(candidate_id):
-                candidate_coordinates = positions.get(candidate_id)
-                candidate_column = layout[candidate_id][1]
-                if source_coordinates and candidate_coordinates:
-                    x_distance = source_coordinates[0] - candidate_coordinates[0]
-                    y_distance = source_coordinates[1] - candidate_coordinates[1]
-                    image_distance = x_distance ** 2 + y_distance ** 2
-                else:
-                    image_distance = abs(column - candidate_column)
-                return image_distance, abs(column - candidate_column), candidate_id
-
-            target_position_id = min(candidates, key=candidate_distance)
             above_leds[led_id] = (
                 position_led_ids[target_position_id],
                 False,

@@ -1668,7 +1668,7 @@ class PathPrefixTests(unittest.TestCase):
             html,
         )
         self.assertIn('name="hold_lighting_direction" value="both" checked', html)
-        self.assertIn("Ein oberster Griff ohne Beleuchtung darüber", html)
+        self.assertIn("genau eine Reihe höher in derselben Spalte", html)
         self.assertIn("Helligkeit freier LEDs: {value}%", html)
         self.assertIn("Helligkeit der Boulder-LEDs: {value}%", html)
         self.assertEqual(html.count('id="save-settings"'), 1)
@@ -2240,6 +2240,57 @@ class HoldLightingDirectionTests(unittest.TestCase):
                 "above",
             ),
             {2: "finish"},
+        )
+
+    def test_above_direction_never_uses_a_sideways_light(self):
+        layout = utils.generate_grid_position_layout(
+            2,
+            2,
+            led_start_corner="bottom_left",
+            led_direction="vertical",
+        )
+        position_ids = {
+            coordinates: position_id
+            for position_id, coordinates in layout.items()
+        }
+        bottom_left = position_ids[(1, 0)]
+        top_right = position_ids[(0, 1)]
+        saved_settings = {
+            "r": 2,
+            "c": 2,
+            "alternating": False,
+            "alternating_start_column": 0,
+            "led_start_corner": "bottom_left",
+            "led_direction": "vertical",
+            "position_led_ids": {
+                bottom_left: 10,
+                top_right: 11,
+            },
+        }
+
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {10: "start"},
+                saved_settings,
+                "above",
+            ),
+            {10: "start"},
+        )
+
+    def test_above_direction_never_skips_over_an_excluded_row(self):
+        saved_settings = {
+            **self.saved_settings,
+            # The middle position is excluded. The top LED must not be used
+            # as a substitute for the missing LED immediately above LED 0.
+            "position_led_ids": {0: 0, 2: 2},
+        }
+        self.assertEqual(
+            main.apply_hold_lighting_direction(
+                {0: "start"},
+                saved_settings,
+                "above",
+            ),
+            {0: "start"},
         )
 
     def test_multiple_grids_do_not_share_above_lights(self):

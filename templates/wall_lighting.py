@@ -12,7 +12,7 @@ TRANSLATIONS = {
         "mode.background_brightness": "Unused LED brightness: {value}%",
         "mode.boulder_brightness": "Boulder LED brightness: {value}%",
         "direction.heading": "Hold illumination direction",
-        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. A highest hold without a light above it is always illuminated from below.",
+        "direction.description": "Choose whether each hold is illuminated from below, above, or both sides. Only an active light directly one row above in the same column counts; otherwise the hold is illuminated from below.",
         "direction.below": "Below only",
         "direction.above": "Above only",
         "direction.both": "Above and below",
@@ -39,7 +39,7 @@ TRANSLATIONS = {
         "mode.background_brightness": "Helligkeit freier LEDs: {value}%",
         "mode.boulder_brightness": "Helligkeit der Boulder-LEDs: {value}%",
         "direction.heading": "Beleuchtungsrichtung der Griffe",
-        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Ein oberster Griff ohne Beleuchtung darüber wird immer von unten beleuchtet.",
+        "direction.description": "Lege fest, ob jeder Griff von unten, von oben oder von beiden Seiten beleuchtet wird. Nur eine aktive Beleuchtung genau eine Reihe höher in derselben Spalte zählt; andernfalls wird der Griff von unten beleuchtet.",
         "direction.below": "Nur von unten",
         "direction.above": "Nur von oben",
         "direction.both": "Oben und unten",
@@ -127,7 +127,7 @@ def return_wall_lighting_html(
 
             <section>
                 <h2 data-i18n="direction.heading">Hold illumination direction</h2>
-                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. A highest hold without a light above it is always illuminated from below.</p>
+                <p data-i18n="direction.description">Choose whether each hold is illuminated from below, above, or both sides. Only an active light directly one row above in the same column counts; otherwise the hold is illuminated from below.</p>
                 <div class="direction-options">
                     <input id="direction-below" type="radio" name="hold_lighting_direction" value="below" __DIRECTION_BELOW_CHECKED__>
                     <label for="direction-below" data-i18n="direction.below">Below only</label>
