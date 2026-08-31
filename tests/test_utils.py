@@ -7,7 +7,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from fastapi import HTTPException
 
@@ -1790,6 +1790,7 @@ class PathPrefixTests(unittest.TestCase):
         self.assertTrue(any(path == "/route_timeout" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping/calculate" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/virtualmapping/preview" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/status" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/status/data" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/status/wled/{controller_index}/test" and "POST" in methods for path, methods in routes))
@@ -2310,15 +2311,98 @@ class VirtualMappingTests(unittest.TestCase):
         self.assertIn("MoonBoard wall", html)
         self.assertIn('src="https://example.com/wall.jpg"', html)
         self.assertIn("fetch('/cruxwledbridge/virtualmapping/calculate'", html)
-        self.assertIn('id="rows" type="number" min="1" step="1" value="18"', html)
+        self.assertIn("const previewUrl = '/cruxwledbridge/virtualmapping/preview'", html)
+        self.assertIn('id="rows" type="number" min="1" step="1" value="12"', html)
         self.assertIn('id="columns" type="number" min="1" step="1" value="11"', html)
         self.assertIn('id="led-start-corner"', html)
         self.assertIn('id="led-direction"', html)
         self.assertIn("physicalIds.join(', ')", html)
         self.assertIn("navigator.clipboard.writeText(output.value)", html)
+        self.assertIn('id="preview-button"', html)
+        self.assertIn("physical_led_ids: ids, enabled", html)
+        self.assertIn("navigator.sendBeacon(previewUrl, body)", html)
+        self.assertIn("Vorschau beenden und Beleuchtung wiederherstellen", html)
         self.assertIn("wird nicht gespeichert", html)
         self.assertNotIn("/defineholds", html)
         self.assertNotIn('id="grid-tabs"', html)
+
+    def test_preview_lights_physical_led_ids_and_cancels_timeout(self):
+        operation = {
+            "status": "ok",
+            "successful_controllers": [{"address": "http://wled"}],
+            "failed_controllers": [],
+        }
+        preview_result = utils.LightingResult(
+            {500: "FF8B00", 601: "FF8B00"},
+            operation,
+        )
+
+        with patch.object(main, "_celebration_active", False):
+            with patch("main.sendPhysicalLeds", return_value=preview_result) as send:
+                with patch("main._cancel_route_timeout") as cancel_timeout:
+                    result = asyncio.run(main.preview_virtual_mapping(
+                        main.VirtualMappingPreviewRequest(
+                            physical_led_ids=[500, 601],
+                            enabled=True,
+                        )
+                    ))
+
+        send.assert_called_once_with([500, 601])
+        cancel_timeout.assert_called_once_with()
+        self.assertEqual(result["status"], "ok")
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["controllers"], {"successful": 1, "failed": 0})
+
+    def test_stopping_preview_restores_previous_wall_lighting(self):
+        operation = {
+            "status": "ok",
+            "successful_controllers": [{"address": "http://wled"}],
+            "failed_controllers": [],
+        }
+        restore = AsyncMock(return_value=utils.LightingResult({}, operation))
+
+        with patch.object(main, "_celebration_active", False):
+            with patch("main._restore_current_wall", new=restore):
+                result = asyncio.run(main.preview_virtual_mapping(
+                    main.VirtualMappingPreviewRequest(
+                        physical_led_ids=[500, 601],
+                        enabled=False,
+                    )
+                ))
+
+        restore.assert_awaited_once_with()
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["message"], "Previous wall lighting restored")
+
+    def test_preview_is_blocked_while_celebration_is_active(self):
+        with patch.object(main, "_celebration_active", True):
+            with patch("main.sendPhysicalLeds") as send:
+                response = asyncio.run(main.preview_virtual_mapping(
+                    main.VirtualMappingPreviewRequest(
+                        physical_led_ids=[500],
+                        enabled=True,
+                    )
+                ))
+
+        send.assert_not_called()
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(json.loads(response.body)["status"], "celebration_active")
+
+    def test_preview_rejects_invalid_physical_led_ids(self):
+        with patch.object(main, "_celebration_active", False):
+            with patch(
+                "main.sendPhysicalLeds",
+                side_effect=ValueError("Physical LED 999 is not configured"),
+            ):
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(main.preview_virtual_mapping(
+                        main.VirtualMappingPreviewRequest(
+                            physical_led_ids=[999],
+                            enabled=True,
+                        )
+                    ))
+
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_virtual_mapping_matches_across_grids_and_flattens_physical_leds(self):
         db = main.SessionLocal()
@@ -3013,6 +3097,64 @@ class WledTests(unittest.TestCase):
                     timeout=2.0,
                 ),
             ],
+        )
+
+    @patch("utils.requests.post")
+    def test_physical_led_preview_uses_controller_local_ids(self, post):
+        post.return_value = Mock()
+
+        result = utils.sendPhysicalLeds([101, 101, 102])
+
+        self.assertEqual(result, {101: "FF8B00", 102: "FF8B00"})
+        self.assertEqual(result.operation["kind"], "virtual-mapping-preview")
+        self.assertEqual(result.operation["status"], "ok")
+        self.assertEqual(
+            post.call_args_list,
+            [
+                call(
+                    "http://192.0.2.10/json/state",
+                    json={"on": False, "bri": 255},
+                    timeout=2.0,
+                ),
+                call(
+                    "http://192.0.2.10/json/state",
+                    json={
+                        "on": True,
+                        "bri": 255,
+                        "seg": {"fx": 0, "i": [1, "FF8B00", 2, "FF8B00"]},
+                    },
+                    timeout=2.0,
+                ),
+            ],
+        )
+
+    @patch("utils.requests.post")
+    def test_physical_led_preview_rejects_unconfigured_ids_before_wled(self, post):
+        with self.assertRaisesRegex(ValueError, "not assigned"):
+            utils.sendPhysicalLeds([99, 101])
+
+        post.assert_not_called()
+
+    @patch("utils.requests.post")
+    def test_physical_led_preview_continues_after_controller_failure(self, post):
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 101},
+            {"ip": "192.0.2.11", "start": 200, "end": 201},
+        ]
+        post.side_effect = [
+            Mock(),
+            Mock(),
+            utils.requests.ConnectionError("offline"),
+        ]
+
+        result = utils.sendPhysicalLeds([101, 200])
+
+        self.assertEqual(result.operation["status"], "partial")
+        self.assertEqual(len(result.operation["successful_controllers"]), 1)
+        self.assertEqual(len(result.operation["failed_controllers"]), 1)
+        self.assertEqual(
+            post.call_args_list[1].kwargs["json"]["seg"]["i"],
+            [1, "FF8B00"],
         )
 
     @patch("utils.requests.post")

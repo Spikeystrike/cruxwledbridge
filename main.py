@@ -28,6 +28,7 @@ from utils import (
     probe_all_wled_controllers,
     probe_wled_controller,
     positions_near_holds,
+    sendPhysicalLeds,
     sendLightToBoulderwall,
     wall_hold_key,
 )
@@ -522,7 +523,7 @@ async def _restore_current_wall():
         _pending_viewed_holds = None
         _route_lighting_active = True
     if _route_lighting_active:
-        await asyncio.to_thread(
+        result = await asyncio.to_thread(
             sendLightToBoulderwall,
             dict(current_wall_holds),
             wall_lighting_mode,
@@ -531,8 +532,9 @@ async def _restore_current_wall():
             above_brightness_percent,
         )
         schedule_route_timeout()
+        return result
     else:
-        await asyncio.to_thread(
+        return await asyncio.to_thread(
             sendLightToBoulderwall,
             {},
             "dark",
@@ -784,6 +786,11 @@ class MultiGridWallTranslation(BaseModel):
 
 class VirtualMappingRequest(GridTranslation):
     wallid: int
+
+
+class VirtualMappingPreviewRequest(BaseModel):
+    physical_led_ids: List[int] = Field(default_factory=list)
+    enabled: bool = True
 
 
 class Climb(BaseModel):
@@ -1319,6 +1326,65 @@ async def calculate_virtual_mapping(payload: VirtualMappingRequest):
         "matches": mapping["matches"],
         "physical_led_ids": mapping["physical_led_ids"],
     }
+
+
+@app.post("/virtualmapping/preview")
+async def preview_virtual_mapping(payload: VirtualMappingPreviewRequest):
+    async with _lighting_state_lock:
+        if _celebration_active:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "message": "Wait until the celebration effect has finished",
+                    "status": "celebration_active",
+                },
+            )
+
+        if payload.enabled:
+            try:
+                result = await asyncio.to_thread(
+                    sendPhysicalLeds,
+                    payload.physical_led_ids,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            operation = getattr(result, "operation", None)
+            if (
+                isinstance(operation, dict)
+                and operation.get("successful_controllers")
+            ):
+                _cancel_route_timeout()
+            message = "Virtual mapping LED preview enabled"
+        else:
+            result = await _restore_current_wall()
+            operation = getattr(result, "operation", None)
+            message = "Previous wall lighting restored"
+
+    operation_status = (
+        operation.get("status", "ok")
+        if isinstance(operation, dict)
+        else "ok"
+    )
+    response_content = {
+        "message": message,
+        "status": operation_status,
+        "enabled": payload.enabled,
+    }
+    if isinstance(operation, dict):
+        response_content["controllers"] = {
+            "successful": len(operation.get("successful_controllers", [])),
+            "failed": len(operation.get("failed_controllers", [])),
+        }
+    if operation_status == "partial":
+        return JSONResponse(status_code=207, content=response_content)
+    if operation_status == "failed":
+        response_content["message"] = (
+            "No WLED controller could show the preview"
+            if payload.enabled
+            else "No WLED controller could restore the wall lighting"
+        )
+        return JSONResponse(status_code=503, content=response_content)
+    return response_content
 
 @app.get ("/wallcreation")
 async def wall_creation(id: str = ""):

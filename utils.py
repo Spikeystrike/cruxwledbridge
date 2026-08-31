@@ -633,6 +633,76 @@ def _scale_hex_color(color, brightness_percent):
     )
 
 
+def sendPhysicalLeds(physical_led_ids, color="FF8B00"):
+    """Illuminate physical cable LEDs directly for a temporary preview."""
+    if not isinstance(physical_led_ids, (list, tuple, set)):
+        raise ValueError("Physical LED IDs must be a list")
+    try:
+        normalized_ids = [int(led_id) for led_id in physical_led_ids]
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Physical LED IDs must be integers") from exc
+    if not normalized_ids:
+        raise ValueError("At least one physical LED ID is required")
+    if any(led_id < 0 for led_id in normalized_ids):
+        raise ValueError("Physical LED IDs must not be negative")
+
+    normalized_color = _scale_hex_color(color, 100)
+    unique_ids = list(dict.fromkeys(normalized_ids))
+    controllers = _wled_controllers()
+    unknown_ids = [
+        led_id
+        for led_id in unique_ids
+        if not any(
+            controller["start"] <= led_id <= controller["end"]
+            for controller in controllers
+        )
+    ]
+    if unknown_ids:
+        raise ValueError(
+            "Physical LED IDs are not assigned to a WLED controller: "
+            f"{unknown_ids}"
+        )
+
+    selected_ids = set(unique_ids)
+    controller_results = []
+    for index, controller in enumerate(controllers):
+        if _turn_off(controller) is None:
+            result = _controller_details(controller, index)
+            result["success"] = False
+            controller_results.append(result)
+            continue
+
+        pixels = []
+        for global_led_id in range(controller["start"], controller["end"] + 1):
+            if global_led_id in selected_ids:
+                pixels.extend([
+                    global_led_id - controller["start"],
+                    normalized_color,
+                ])
+        success = True
+        if pixels:
+            success = _request_wled(
+                controller,
+                "POST",
+                controller["url"],
+                action="virtual-mapping-preview",
+                json={
+                    "on": True,
+                    "bri": 255,
+                    "seg": {"fx": 0, "i": pixels},
+                },
+            ) is not None
+        result = _controller_details(controller, index)
+        result["success"] = success
+        controller_results.append(result)
+
+    operation = _finish_wled_operation("virtual-mapping-preview", controller_results)
+    return LightingResult(
+        {led_id: normalized_color for led_id in unique_ids},
+        operation,
+    )
+
+
 def sendLightToBoulderwall(
     holds,
     mode="dark",
