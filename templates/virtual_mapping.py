@@ -26,15 +26,23 @@ TRANSLATIONS = {
         "help.corners": "Click four MoonBoard corner points in this order:",
         "help.corner_order": "Top left, top right, bottom right, bottom left",
         "help.mapping": "The virtual grid is not saved. Every virtual position is matched to the nearest active position across all saved Wall Creation grids and translated through hole2LEDS.",
+        "help.preview": "The preview lights the mapped physical cable LEDs orange. Stop it to restore the previous route or off state.",
         "button.calculate": "Calculate physical LED list",
         "button.reset": "Reset virtual grid",
         "button.copy": "Copy LED list",
+        "button.preview": "Light mapped LEDs",
+        "button.restore": "Stop preview and restore lighting",
         "result.heading": "Physical cable LED numbers",
         "result.description": "Comma-separated in the selected virtual cable order:",
         "status.points": "Corner points: {count} / 4",
         "status.calculating": "Calculating nearest physical LEDs...",
         "status.mapped": "Mapped {virtual} virtual positions to {physical} physical LEDs. Repeated physical IDs: {duplicates}.",
         "status.copied": "LED list copied.",
+        "status.previewing": "Lighting mapped physical LEDs...",
+        "status.preview_active": "Mapped physical LEDs are lit. Successful controllers: {successful}; failed: {failed}.",
+        "status.restoring": "Restoring previous wall lighting...",
+        "status.restored": "Previous wall lighting restored.",
+        "status.preview_error": "LED preview failed: {message}",
         "status.error": "Could not calculate the mapping: {message}",
         "alert.alternating_columns": "Columns must be at least 2 for an alternating grid.",
         "alert.dimensions": "Rows and columns must be positive whole numbers.",
@@ -61,15 +69,23 @@ TRANSLATIONS = {
         "help.corners": "Klicke vier MoonBoard-Eckpunkte in dieser Reihenfolge an:",
         "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
         "help.mapping": "Das virtuelle Raster wird nicht gespeichert. Jede virtuelle Position wird dem nächsten aktiven Punkt über alle gespeicherten Wall-Creation-Raster hinweg zugeordnet und anschließend über hole2LEDS übersetzt.",
+        "help.preview": "Die Vorschau lässt die zugeordneten physischen Kabel-LEDs orange leuchten. Beim Beenden wird die vorherige Route beziehungsweise der ausgeschaltete Zustand wiederhergestellt.",
         "button.calculate": "Physische LED-Liste berechnen",
         "button.reset": "Virtuelles Raster zurücksetzen",
         "button.copy": "LED-Liste kopieren",
+        "button.preview": "Ermittelte LEDs aufleuchten lassen",
+        "button.restore": "Vorschau beenden und Beleuchtung wiederherstellen",
         "result.heading": "Physische Kabel-LED-Nummern",
         "result.description": "Kommagetrennt in der gewählten virtuellen Kabelreihenfolge:",
         "status.points": "Eckpunkte: {count} / 4",
         "status.calculating": "Nächstgelegene physische LEDs werden berechnet ...",
         "status.mapped": "{virtual} virtuelle Positionen wurden {physical} physischen LEDs zugeordnet. Wiederholte physische IDs: {duplicates}.",
         "status.copied": "LED-Liste wurde kopiert.",
+        "status.previewing": "Ermittelte physische LEDs werden eingeschaltet ...",
+        "status.preview_active": "Die ermittelten physischen LEDs leuchten. Erfolgreiche Controller: {successful}; fehlgeschlagen: {failed}.",
+        "status.restoring": "Vorherige Wandbeleuchtung wird wiederhergestellt ...",
+        "status.restored": "Vorherige Wandbeleuchtung wurde wiederhergestellt.",
+        "status.preview_error": "LED-Vorschau fehlgeschlagen: {message}",
         "status.error": "Die Zuordnung konnte nicht berechnet werden: {message}",
         "alert.alternating_columns": "Für ein alternierendes Raster müssen mindestens 2 Spalten angegeben werden.",
         "alert.dimensions": "Reihen und Spalten müssen positive ganze Zahlen sein.",
@@ -86,6 +102,7 @@ def return_virtual_mapping_html(wall, path_prefix=""):
         "__WALL_IMAGE_HEIGHT__": json.dumps(wall.get("image_height")),
         "__IMAGE_URL__": escape(str(wall.get("image_url") or ""), quote=True),
         "__CALCULATE_URL__": f"{path_prefix}/virtualmapping/calculate",
+        "__PREVIEW_URL__": f"{path_prefix}/virtualmapping/preview",
         "__LANGUAGE_SWITCH__": language_switch_html(TRANSLATIONS),
     }
     html = """
@@ -125,6 +142,11 @@ def return_virtual_mapping_html(wall, path_prefix=""):
         #result { padding: 18px; border-radius: 9px; background: white; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
         #result h2 { margin-top: 0; }
         #physical-led-output { width: 100%; min-height: 130px; padding: 12px; resize: vertical; font: 15px/1.45 monospace; border: 1px solid #999; border-radius: 5px; }
+        .result-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+        #preview-button { background: #d96d00; }
+        #preview-button:hover { background: #ad5700; }
+        #preview-button.is-active { background: #a32222; }
+        #preview-button.is-active:hover { background: #7f1818; }
     </style>
 </head>
 <body>
@@ -136,7 +158,7 @@ def return_virtual_mapping_html(wall, path_prefix=""):
         <form id="mapping-form">
             <div class="form-row">
                 <label for="rows" data-i18n="form.rows">Rows:</label>
-                <input id="rows" type="number" min="1" step="1" value="18" required>
+                <input id="rows" type="number" min="1" step="1" value="12" required>
                 <label for="columns" data-i18n="form.columns">Columns:</label>
                 <input id="columns" type="number" min="1" step="1" value="11" required>
                 <label for="alternating"><input id="alternating" type="checkbox"> <span data-i18n="form.alternating">Alternating grid</span></label>
@@ -182,7 +204,11 @@ def return_virtual_mapping_html(wall, path_prefix=""):
             <h2 data-i18n="result.heading">Physical cable LED numbers</h2>
             <p data-i18n="result.description">Comma-separated in the selected virtual cable order:</p>
             <textarea id="physical-led-output" readonly></textarea>
-            <button id="copy-button" type="button" data-i18n="button.copy">Copy LED list</button>
+            <p class="help" data-i18n="help.preview">The preview lights the mapped physical cable LEDs orange. Stop it to restore the previous route or off state.</p>
+            <div class="result-actions">
+                <button id="copy-button" type="button" data-i18n="button.copy">Copy LED list</button>
+                <button id="preview-button" type="button" data-i18n="button.preview">Light mapped LEDs</button>
+            </div>
         </section>
     </main>
     __LANGUAGE_SWITCH__
@@ -204,9 +230,14 @@ def return_virtual_mapping_html(wall, path_prefix=""):
         const resultSection = document.getElementById('result');
         const output = document.getElementById('physical-led-output');
         const copyButton = document.getElementById('copy-button');
+        const previewButton = document.getElementById('preview-button');
+        const previewUrl = '__PREVIEW_URL__';
         const status = document.getElementById('status');
         let points = [];
         let matches = [];
+        let physicalIds = [];
+        let previewActive = false;
+        let previewRequestPending = false;
         let statusState = { key: 'status.points', replacements: { count: 0 }, error: false };
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
@@ -228,15 +259,27 @@ def return_virtual_mapping_html(wall, path_prefix=""):
             status.textContent = t(statusState.key, statusState.replacements);
             status.style.color = statusState.error ? '#b00020' : '#333';
         }
+        function renderPreviewButton() {
+            previewButton.textContent = t(previewActive ? 'button.restore' : 'button.preview');
+            previewButton.classList.toggle('is-active', previewActive);
+            previewButton.disabled = previewRequestPending || physicalIds.length === 0;
+        }
         function removeMappingMarkers() {
             imageContainer.querySelectorAll('.virtual-point, .source-point').forEach((element) => element.remove());
             matches = [];
         }
-        function clearResult() {
+        async function clearResult() {
+            if (previewActive) {
+                const restored = await setPreview(false, true);
+                if (!restored) return false;
+            }
             removeMappingMarkers();
+            physicalIds = [];
             output.value = '';
             resultSection.hidden = true;
+            renderPreviewButton();
             setStatus('status.points', { count: points.length });
+            return true;
         }
         function renderCorners() {
             imageContainer.querySelectorAll('.corner-point').forEach((element) => element.remove());
@@ -295,32 +338,67 @@ def return_virtual_mapping_html(wall, path_prefix=""):
                 led_direction: ledDirection.value,
             };
         }
+        async function setPreview(enabled, silent = false) {
+            if (previewRequestPending) return false;
+            const ids = [...physicalIds];
+            previewRequestPending = true;
+            renderPreviewButton();
+            if (!silent) setStatus(enabled ? 'status.previewing' : 'status.restoring');
+            try {
+                const response = await fetch(previewUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ physical_led_ids: ids, enabled }),
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.detail || data.message || `HTTP ${response.status}`);
+                previewActive = enabled;
+                if (!silent) {
+                    if (enabled) {
+                        setStatus('status.preview_active', {
+                            successful: data.controllers?.successful ?? 0,
+                            failed: data.controllers?.failed ?? 0,
+                        });
+                    } else {
+                        setStatus('status.restored');
+                    }
+                }
+                return true;
+            } catch (error) {
+                setStatus('status.preview_error', { message: error.message }, true);
+                return false;
+            } finally {
+                previewRequestPending = false;
+                renderPreviewButton();
+            }
+        }
 
         imageContainer.addEventListener('click', (event) => {
             if (points.length >= 4) return;
             const rect = climbingImage.getBoundingClientRect();
             points.push(displayToImage(event.clientX - rect.left, event.clientY - rect.top));
-            clearResult();
+            void clearResult();
             renderCorners();
         });
         imageContainer.addEventListener('contextmenu', (event) => {
             event.preventDefault();
             if (!points.length) return;
             points.pop();
-            clearResult();
+            void clearResult();
             renderCorners();
         });
-        form.addEventListener('change', clearResult);
-        form.addEventListener('input', clearResult);
+        form.addEventListener('change', () => { void clearResult(); });
+        form.addEventListener('input', () => { void clearResult(); });
         alternatingInput.addEventListener('change', () => {
             alternatingStart.disabled = !alternatingInput.checked;
         });
         resetButton.addEventListener('click', () => {
             points = [];
-            clearResult();
+            void clearResult();
             renderCorners();
         });
         calculateButton.addEventListener('click', async () => {
+            if (previewActive && !await setPreview(false, true)) return;
             const payload = buildPayload();
             if (!Number.isInteger(payload.r) || payload.r < 1 || !Number.isInteger(payload.c) || payload.c < 1) {
                 window.alert(t('alert.dimensions'));
@@ -341,14 +419,15 @@ def return_virtual_mapping_html(wall, path_prefix=""):
                 const data = await response.json();
                 if (!response.ok) throw new Error(data.detail || data.message || `HTTP ${response.status}`);
                 matches = data.matches || [];
-                const physicalIds = data.physical_led_ids || [];
+                physicalIds = data.physical_led_ids || [];
                 output.value = physicalIds.join(', ');
                 resultSection.hidden = false;
                 renderMatches();
+                renderPreviewButton();
                 const duplicates = physicalIds.length - new Set(physicalIds).size;
                 setStatus('status.mapped', { virtual: matches.length, physical: physicalIds.length, duplicates });
             } catch (error) {
-                clearResult();
+                await clearResult();
                 setStatus('status.error', { message: error.message }, true);
             } finally {
                 calculateButton.disabled = points.length !== 4;
@@ -364,11 +443,25 @@ def return_virtual_mapping_html(wall, path_prefix=""):
             }
             setStatus('status.copied');
         });
+        previewButton.addEventListener('click', () => {
+            void setPreview(!previewActive);
+        });
+        window.addEventListener('pagehide', () => {
+            if (!previewActive || !navigator.sendBeacon) return;
+            const body = new Blob([
+                JSON.stringify({ physical_led_ids: physicalIds, enabled: false }),
+            ], { type: 'application/json' });
+            navigator.sendBeacon(previewUrl, body);
+        });
         window.addEventListener('resize', redraw);
         if ('ResizeObserver' in window) new ResizeObserver(redraw).observe(climbingImage);
-        window.addEventListener('crux-language-change', renderStatus);
+        window.addEventListener('crux-language-change', () => {
+            renderStatus();
+            renderPreviewButton();
+        });
         if (climbingImage.complete && climbingImage.naturalWidth) redraw();
         else climbingImage.addEventListener('load', redraw, { once: true });
+        renderPreviewButton();
         renderStatus();
     </script>
 </body>
