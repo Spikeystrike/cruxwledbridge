@@ -13,6 +13,10 @@ wled_controllers = [
     },
 ]
 
+# Maximum wait per WLED HTTP request. A failed controller is skipped after
+# this timeout while the remaining configured controllers keep working.
+wled_request_timeout_seconds = 2.0
+
 # Color codes in HEX without # that will be used for the LEDS
 colors = {
     "hand": "0000FF",

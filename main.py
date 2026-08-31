@@ -1,9 +1,13 @@
 from fastapi.exceptions import RequestValidationError
 import asyncio
+import copy
 import uvicorn
 import logging
 import os
+import threading
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from http import HTTPStatus
 from html import escape
 from urllib.parse import quote
@@ -16,15 +20,18 @@ from utils import (
     CELEBRATION_EFFECTS,
     generate_grid,
     generate_grid_position_layout,
+    get_last_wled_operation,
     ledCalculation,
     lightUpHoldId,
     map_virtual_grid_to_physical_leds,
     playCelebrationEffect,
+    probe_all_wled_controllers,
+    probe_wled_controller,
     positions_near_holds,
     sendLightToBoulderwall,
     wall_hold_key,
 )
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.types import JSON
 import requests
@@ -33,6 +40,7 @@ from templates.wallselector import returnwallhtml
 from templates.language import language_switch_html
 from templates.overview import return_overview_html
 from templates.settings import return_settings_html
+from templates.status import return_status_html
 from templates.virtual_mapping import return_virtual_mapping_html
 from config_loader import config
 Base = declarative_base()
@@ -319,6 +327,130 @@ _celebration_tasks = set()
 _route_timeout_generation = 0
 _route_timeout_task = None
 _route_timeout_sleep_task = None
+_diagnostics_lock = threading.Lock()
+_route_diagnostics = {
+    "last_route_request": None,
+    "last_successful_route": None,
+    "last_route_error": None,
+}
+
+
+def _diagnostic_timestamp():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _route_summary(climb, status, error=None):
+    summary = {
+        "climb_id": climb.id,
+        "climb_name": climb.name,
+        "wall_id": climb.wall_id,
+        "status": status,
+        "timestamp": _diagnostic_timestamp(),
+    }
+    if error:
+        summary["error"] = str(error)
+    return summary
+
+
+def _record_route_diagnostic(climb, status, error=None):
+    summary = _route_summary(climb, status, error)
+    with _diagnostics_lock:
+        _route_diagnostics["last_route_request"] = summary
+        if status == "ok":
+            _route_diagnostics["last_successful_route"] = summary
+        if error:
+            _route_diagnostics["last_route_error"] = summary
+    return summary
+
+
+def get_route_diagnostics():
+    with _diagnostics_lock:
+        return copy.deepcopy(_route_diagnostics)
+
+
+def check_database_status():
+    checked_at = _diagnostic_timestamp()
+    db = SessionLocal()
+    started = time.monotonic()
+    try:
+        db.execute(text("SELECT 1"))
+        wall_count = db.query(WallDB).count()
+        mapping_count = db.query(WallCreationDB).count()
+    except Exception as exc:
+        logging.getLogger("cruxwledbridge").exception(
+            "Database status check failed"
+        )
+        return {
+            "reachable": False,
+            "checked_at": checked_at,
+            "response_ms": round((time.monotonic() - started) * 1000, 1),
+            "error": str(exc),
+        }
+    finally:
+        db.close()
+    return {
+        "reachable": True,
+        "checked_at": checked_at,
+        "response_ms": round((time.monotonic() - started) * 1000, 1),
+        "wall_count": wall_count,
+        "mapping_count": mapping_count,
+    }
+
+
+def check_crux_api_status():
+    checked_at = _diagnostic_timestamp()
+    db = None
+    try:
+        db = SessionLocal()
+        wall = db.query(WallDB).order_by(WallDB.id).first()
+        wall_id = wall.id if wall else None
+    except Exception as exc:
+        return {
+            "reachable": None,
+            "checked_at": checked_at,
+            "token_configured": bool(str(token).strip()),
+            "message": f"CRUX check skipped because the database failed: {exc}",
+        }
+    finally:
+        if db is not None:
+            db.close()
+    if wall_id is None:
+        return {
+            "reachable": None,
+            "checked_at": checked_at,
+            "token_configured": bool(str(token).strip()),
+            "message": "No saved wall is available for a live CRUX API check",
+        }
+
+    started = time.monotonic()
+    try:
+        response = requests.get(
+            f"https://www.cruxapp.ca/api/v1/gym_walls/{wall_id}",
+            headers=auth_header,
+            verify=False,
+            timeout=3,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logging.getLogger("cruxwledbridge").warning(
+            "CRUX API status check failed: %s",
+            exc,
+        )
+        return {
+            "reachable": False,
+            "checked_at": checked_at,
+            "token_configured": bool(str(token).strip()),
+            "wall_id": wall_id,
+            "response_ms": round((time.monotonic() - started) * 1000, 1),
+            "error": str(exc),
+        }
+    return {
+        "reachable": True,
+        "checked_at": checked_at,
+        "token_configured": bool(str(token).strip()),
+        "wall_id": wall_id,
+        "response_ms": round((time.monotonic() - started) * 1000, 1),
+    }
 
 
 def _cancel_route_timeout():
@@ -701,6 +833,41 @@ async def root():
     return HTMLResponse(content=return_overview_html(APP_PATH_PREFIX))
 
 
+@app.get("/status", response_class=HTMLResponse)
+async def status_page():
+    return HTMLResponse(content=return_status_html(APP_PATH_PREFIX))
+
+
+@app.get("/status/data")
+async def status_data():
+    wled, database, crux = await asyncio.gather(
+        asyncio.to_thread(probe_all_wled_controllers),
+        asyncio.to_thread(check_database_status),
+        asyncio.to_thread(check_crux_api_status),
+    )
+    return {
+        "checked_at": _diagnostic_timestamp(),
+        "wled_controllers": wled,
+        "database": database,
+        "crux_api": crux,
+        "route_diagnostics": get_route_diagnostics(),
+        "last_wled_operation": get_last_wled_operation(),
+        "lighting": {
+            "mode": wall_lighting_mode,
+            "route_active": _route_lighting_active,
+            "celebration_active": _celebration_active,
+        },
+    }
+
+
+@app.post("/status/wled/{controller_index}/test")
+async def test_wled_controller(controller_index: int):
+    try:
+        return await asyncio.to_thread(probe_wled_controller, controller_index)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/viewed")
 async def viewed(payload: PayL, request: Request):
     global current_wall_holds, _pending_viewed_holds, _route_lighting_active
@@ -711,6 +878,7 @@ async def viewed(payload: PayL, request: Request):
         "name": climb.name,
         "wall_id": climb.wall_id,
     }
+    db = None
     try:
         holds = {}
         db = SessionLocal()
@@ -735,10 +903,13 @@ async def viewed(payload: PayL, request: Request):
                 _pending_viewed_holds = dict(holds)
                 _route_lighting_active = True
                 _cancel_route_timeout()
+                _record_route_diagnostic(climb, "deferred")
+                operation_status = "deferred"
+                operation = None
             else:
                 current_wall_holds = dict(holds)
                 _pending_viewed_holds = None
-                await asyncio.to_thread(
+                lighting_result = await asyncio.to_thread(
                     sendLightToBoulderwall,
                     holds,
                     wall_lighting_mode,
@@ -746,17 +917,74 @@ async def viewed(payload: PayL, request: Request):
                     boulder_brightness_percent,
                     above_brightness_percent,
                 )
-                _route_lighting_active = True
-                schedule_route_timeout()
-        db.close()
-    except Exception as e:
-        print("ERROR")
-       
-    return {
-        "message": "Payload received successfully",
-        "name": climb.name,  # Beispiel: Zugriff auf eines der Felder
-        "image_url": climb.image_url,  # Zugriff auf andere Felder
+                operation = getattr(lighting_result, "operation", None)
+                operation_status = (
+                    operation.get("status", "ok")
+                    if isinstance(operation, dict)
+                    else "ok"
+                )
+                successful_controllers = (
+                    operation.get("successful_controllers", [])
+                    if isinstance(operation, dict)
+                    else [True]
+                )
+                _route_lighting_active = bool(successful_controllers)
+                if _route_lighting_active:
+                    schedule_route_timeout()
+
+                if operation_status == "ok":
+                    _record_route_diagnostic(climb, "ok")
+                else:
+                    failed = operation.get("failed_controllers", [])
+                    failed_addresses = ", ".join(
+                        controller.get("address", "unknown")
+                        for controller in failed
+                    )
+                    error = (
+                        f"WLED controller failure: {failed_addresses}"
+                        if failed_addresses
+                        else "WLED controller failure"
+                    )
+                    _record_route_diagnostic(climb, operation_status, error)
+    except Exception as exc:
+        _record_route_diagnostic(climb, "failed", exc)
+        logging.getLogger("cruxwledbridge").exception(
+            "Could not display climb %s on wall %s",
+            climb.id,
+            climb.wall_id,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Could not display the requested route",
+        ) from exc
+    finally:
+        if db is not None:
+            db.close()
+
+    response_content = {
+        "message": (
+            "Route queued until the celebration finishes"
+            if operation_status == "deferred"
+            else "Payload received successfully"
+        ),
+        "status": operation_status,
+        "name": climb.name,
+        "image_url": str(climb.image_url),
     }
+    if isinstance(operation, dict):
+        response_content["controllers"] = {
+            "successful": len(operation.get("successful_controllers", [])),
+            "failed": len(operation.get("failed_controllers", [])),
+        }
+    if operation_status == "partial":
+        response_content["message"] = "Route displayed with WLED controller failures"
+        return JSONResponse(status_code=207, content=response_content)
+    if operation_status == "failed":
+        response_content["message"] = "No WLED controller could display the route"
+        return JSONResponse(status_code=503, content=response_content)
+    if operation_status == "deferred":
+        return JSONResponse(status_code=202, content=response_content)
+    return response_content
 
 
 @app.post("/sent")

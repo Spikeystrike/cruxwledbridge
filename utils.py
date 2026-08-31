@@ -1,3 +1,10 @@
+import copy
+import logging
+import threading
+import time
+from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+
 import requests
 import numpy as np
 from config_loader import config
@@ -9,6 +16,177 @@ CELEBRATION_EFFECTS = {
     "color_twinkles": {"fx": 74, "sx": 170, "ix": 220},
     "pride": {"fx": 63, "sx": 170, "ix": 190},
 }
+
+logger = logging.getLogger("cruxwledbridge.wled")
+_wled_status_lock = threading.Lock()
+_wled_status = {}
+_last_wled_operation = None
+
+
+class LightingResult(dict):
+    """Existing LED mapping result plus a non-serialized operation report."""
+
+    def __init__(self, values, operation):
+        super().__init__(values)
+        self.operation = operation
+
+
+def _utc_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _wled_request_timeout():
+    try:
+        timeout = float(getattr(config, "wled_request_timeout_seconds", 2.0))
+    except (TypeError, ValueError):
+        timeout = 2.0
+    return timeout if timeout > 0 else 2.0
+
+
+def _controller_identity(controller):
+    return controller["base_url"]
+
+
+def _controller_details(controller, index=None):
+    details = {
+        "index": index,
+        "address": controller["base_url"],
+        "start": controller["start"],
+        "end": controller["end"],
+        "configured_led_count": controller["end"] - controller["start"] + 1,
+    }
+    with _wled_status_lock:
+        details.update(copy.deepcopy(
+            _wled_status.get(_controller_identity(controller), {})
+        ))
+    return details
+
+
+def _record_wled_success(controller, elapsed_ms, info=None):
+    checked_at = _utc_now()
+    update = {
+        "reachable": True,
+        "last_checked_at": checked_at,
+        "last_success_at": checked_at,
+        "last_response_ms": round(elapsed_ms, 1),
+        "last_error": None,
+    }
+    if isinstance(info, dict):
+        update["firmware_version"] = info.get("ver")
+        update["device_name"] = info.get("name")
+        leds = info.get("leds")
+        if isinstance(leds, dict):
+            update["reported_led_count"] = leds.get("count")
+    with _wled_status_lock:
+        _wled_status.setdefault(_controller_identity(controller), {}).update(update)
+
+
+def _record_wled_failure(controller, error, elapsed_ms):
+    checked_at = _utc_now()
+    update = {
+        "reachable": False,
+        "last_checked_at": checked_at,
+        "last_error_at": checked_at,
+        "last_response_ms": round(elapsed_ms, 1),
+        "last_error": str(error),
+    }
+    with _wled_status_lock:
+        _wled_status.setdefault(_controller_identity(controller), {}).update(update)
+
+
+def _request_wled(controller, method, url, *, action, json=None):
+    started = time.monotonic()
+    try:
+        if method == "POST":
+            response = requests.post(
+                url,
+                json=json,
+                timeout=_wled_request_timeout(),
+            )
+        else:
+            response = requests.get(url, timeout=_wled_request_timeout())
+        response.raise_for_status()
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        _record_wled_failure(controller, exc, elapsed_ms)
+        logger.warning(
+            "WLED %s failed for %s (LEDs %s-%s): %s",
+            action,
+            controller["base_url"],
+            controller["start"],
+            controller["end"],
+            exc,
+        )
+        return None
+
+    elapsed_ms = (time.monotonic() - started) * 1000
+    _record_wled_success(controller, elapsed_ms)
+    return response
+
+
+def _finish_wled_operation(kind, controller_results):
+    global _last_wled_operation
+    successful = [result for result in controller_results if result["success"]]
+    failed = [result for result in controller_results if not result["success"]]
+    if failed and successful:
+        status = "partial"
+    elif failed:
+        status = "failed"
+    else:
+        status = "ok"
+    report = {
+        "kind": kind,
+        "status": status,
+        "finished_at": _utc_now(),
+        "successful_controllers": successful,
+        "failed_controllers": failed,
+    }
+    with _wled_status_lock:
+        _last_wled_operation = copy.deepcopy(report)
+    return report
+
+
+def get_last_wled_operation():
+    with _wled_status_lock:
+        return copy.deepcopy(_last_wled_operation)
+
+
+def get_wled_status_snapshot():
+    return [
+        _controller_details(controller, index)
+        for index, controller in enumerate(_wled_controllers())
+    ]
+
+
+def probe_wled_controller(index):
+    controllers = _wled_controllers()
+    if index < 0 or index >= len(controllers):
+        raise ValueError(f"Unknown WLED controller index: {index}")
+    controller = controllers[index]
+    started = time.monotonic()
+    try:
+        response = requests.get(
+            f"{controller['base_url']}/json/info",
+            timeout=_wled_request_timeout(),
+        )
+        response.raise_for_status()
+        info = response.json()
+        if not isinstance(info, dict):
+            raise ValueError("WLED returned invalid /json/info data")
+    except (requests.RequestException, ValueError, TypeError) as exc:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        _record_wled_failure(controller, exc, elapsed_ms)
+        logger.warning("WLED status check failed for %s: %s", controller["base_url"], exc)
+    else:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        _record_wled_success(controller, elapsed_ms, info)
+    return _controller_details(controller, index)
+
+
+def probe_all_wled_controllers():
+    controller_count = len(_wled_controllers())
+    with ThreadPoolExecutor(max_workers=controller_count) as executor:
+        return list(executor.map(probe_wled_controller, range(controller_count)))
 
 
 def wall_hold_key(wall_id, hold_id):
@@ -32,6 +210,7 @@ def _wled_controllers():
         if not ip.startswith(("http://", "https://")):
             ip = f"http://{ip}"
         normalized.append({
+            "base_url": ip,
             "url": f"{ip}/json/state",
             "start": start,
             "end": end,
@@ -46,8 +225,11 @@ def _wled_controllers():
 
 
 def _turn_off(controller):
-    return requests.post(
+    return _request_wled(
+        controller,
+        "POST",
         controller["url"],
+        action="switch-off",
         json={"on": False, "bri": 255},
     )
 
@@ -488,8 +670,13 @@ def sendLightToBoulderwall(
             )
 
     controllers = _wled_controllers()
-    for controller in controllers:
-        _turn_off(controller)
+    controller_results = []
+    for index, controller in enumerate(controllers):
+        if _turn_off(controller) is None:
+            result = _controller_details(controller, index)
+            result["success"] = False
+            controller_results.append(result)
+            continue
 
         pixels = []
         for global_led_id in range(controller["start"], controller["end"] + 1):
@@ -499,14 +686,22 @@ def sendLightToBoulderwall(
             if color is not None:
                 pixels.extend([global_led_id - controller["start"], color])
 
+        success = True
         if pixels:
-            requests.post(
+            success = _request_wled(
+                controller,
+                "POST",
                 controller["url"],
+                action="route-render",
                 # Explicitly return the segment to Solid. A celebration may
                 # have left a WLED effect active before this state is restored.
                 json={"on": True, "bri": 255, "seg": {"fx": 0, "i": pixels}},
-            )
-    return led
+            ) is not None
+        result = _controller_details(controller, index)
+        result["success"] = success
+        controller_results.append(result)
+    operation = _finish_wled_operation("route", controller_results)
+    return LightingResult(led, operation)
 
 
 def playCelebrationEffect(effect):
@@ -515,19 +710,30 @@ def playCelebrationEffect(effect):
     if settings is None:
         raise ValueError(f"Unknown celebration effect: {effect}")
 
-    for controller in _wled_controllers():
+    controller_results = []
+    for index, controller in enumerate(_wled_controllers()):
         led_count = controller["end"] - controller["start"] + 1
         # Boulder rendering uses WLED's individual LED control, which freezes
         # the segment. Turning WLED off explicitly leaves individual LED mode;
         # start the effect only in the following request so the animation is
         # reliably active regardless of the previously rendered boulder state.
-        requests.post(
+        reset_response = _request_wled(
+            controller,
+            "POST",
             controller["url"],
+            action="celebration-reset",
             json={"on": False, "tt": 0},
-            timeout=2,
         )
-        requests.post(
+        if reset_response is None:
+            result = _controller_details(controller, index)
+            result["success"] = False
+            controller_results.append(result)
+            continue
+        effect_response = _request_wled(
+            controller,
+            "POST",
             controller["url"],
+            action="celebration-start",
             json={
                 "on": True,
                 "bri": 255,
@@ -542,8 +748,11 @@ def playCelebrationEffect(effect):
                     **settings,
                 },
             },
-            timeout=2,
         )
+        result = _controller_details(controller, index)
+        result["success"] = effect_response is not None
+        controller_results.append(result)
+    return _finish_wled_operation("celebration", controller_results)
 
 
 def lightUpHoldId(holdid, color):
@@ -554,8 +763,11 @@ def lightUpHoldId(holdid, color):
     for controller in controllers:
         if controller["start"] <= holdid <= controller["end"]:
             local_led_id = holdid - controller["start"]
-            return requests.post(
+            return _request_wled(
+                controller,
+                "POST",
                 controller["url"],
+                action="single-led",
                 json={
                     "on": True,
                     "bri": 255,

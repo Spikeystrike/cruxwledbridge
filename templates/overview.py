@@ -21,6 +21,9 @@ TRANSLATIONS = {
         "settings.heading": "Settings",
         "settings.description": "Configure energy saving, including when an illuminated route switches off automatically.",
         "settings.open": "Open settings",
+        "status.heading": "System status",
+        "status.description": "Check WLED firmware versions, controller reachability, CRUX, database and recent route errors.",
+        "status.open": "Open status",
     },
     "de": {
         "page.title": "CRUX WLED Bridge",
@@ -39,6 +42,9 @@ TRANSLATIONS = {
         "settings.heading": "Einstellungen",
         "settings.description": "Konfiguriere den Energiesparmodus und wann eine beleuchtete Route automatisch ausgeschaltet wird.",
         "settings.open": "Einstellungen öffnen",
+        "status.heading": "Systemstatus",
+        "status.description": "Prüfe WLED-Firmwareversionen, Controller-Erreichbarkeit, CRUX, Datenbank und letzte Routenfehler.",
+        "status.open": "Status öffnen",
     },
 }
 
@@ -173,6 +179,11 @@ def return_overview_html(path_prefix=""):
                     <h2 data-i18n="settings.heading">Settings</h2>
                     <p data-i18n="settings.description">Configure energy saving, including when an illuminated route switches off automatically.</p>
                     <a class="button" href="{path_prefix}/settings" data-i18n="settings.open">Open settings</a>
+                </section>
+                <section class="card">
+                    <h2 data-i18n="status.heading">System status</h2>
+                    <p data-i18n="status.description">Check WLED firmware versions, controller reachability, CRUX, database and recent route errors.</p>
+                    <a class="button" href="{path_prefix}/status" data-i18n="status.open">Open status</a>
                 </section>
             </div>
         </main>

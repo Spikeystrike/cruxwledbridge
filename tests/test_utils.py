@@ -1735,6 +1735,7 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn('name="gym"', html)
         self.assertIn('href="/cruxwledbridge/wall_lighting"', html)
         self.assertIn('href="/cruxwledbridge/settings"', html)
+        self.assertIn('href="/cruxwledbridge/status"', html)
         self.assertIn("map its holds to the physical LEDs", html)
         self.assertIn("configure the celebration", html)
         self.assertIn("Configure energy saving", html)
@@ -1789,6 +1790,9 @@ class PathPrefixTests(unittest.TestCase):
         self.assertTrue(any(path == "/route_timeout" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping/calculate" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/status" and "GET" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/status/data" and "GET" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/status/wled/{controller_index}/test" and "POST" in methods for path, methods in routes))
         self.assertFalse(any(path in {"/toggle_gui", "/toggle_mode"} for path, _ in routes))
 
     def test_wall_lighting_mode_updates_server_state(self):
@@ -2697,6 +2701,285 @@ class HoldLightingDirectionTests(unittest.TestCase):
         )
 
 
+class DiagnosticsTests(unittest.TestCase):
+    def setUp(self):
+        self.original_controllers = config.wled_controllers
+        self.original_hole2leds = config.hole2LEDS
+        self.original_timeout = getattr(
+            config,
+            "wled_request_timeout_seconds",
+            None,
+        )
+        self.original_route_diagnostics = main.get_route_diagnostics()
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 102},
+        ]
+        config.hole2LEDS = {0: [100], 1: [101], 2: [102]}
+        config.wled_request_timeout_seconds = 1.25
+        with utils._wled_status_lock:
+            utils._wled_status.clear()
+            utils._last_wled_operation = None
+        with main._diagnostics_lock:
+            main._route_diagnostics = {
+                "last_route_request": None,
+                "last_successful_route": None,
+                "last_route_error": None,
+            }
+
+    def tearDown(self):
+        config.wled_controllers = self.original_controllers
+        config.hole2LEDS = self.original_hole2leds
+        if self.original_timeout is None:
+            delattr(config, "wled_request_timeout_seconds")
+        else:
+            config.wled_request_timeout_seconds = self.original_timeout
+        with utils._wled_status_lock:
+            utils._wled_status.clear()
+            utils._last_wled_operation = None
+        with main._diagnostics_lock:
+            main._route_diagnostics = self.original_route_diagnostics
+
+    @staticmethod
+    def viewed_payload(climb_id=901):
+        return main.PayL(payload={
+            "id": climb_id,
+            "wall_id": 44,
+            "angle": None,
+            "color": None,
+            "created_at": None,
+            "description": None,
+            "foot_rules": None,
+            "grade": "6B",
+            "gym_name": None,
+            "gym_slug": None,
+            "holds": [],
+            "image_height": None,
+            "image_url": "https://example.com/climb.jpg",
+            "image_width": 100,
+            "name": "Diagnostic Boulder",
+            "number_of_comments": 0,
+            "number_of_sends": 0,
+            "sends": None,
+            "setter_id": 1,
+            "setter_name": "Setter",
+            "unedited_image_url": "https://example.com/original.jpg",
+            "unset_at": None,
+            "updated_at": "2026-08-31T00:00:00Z",
+        })
+
+    @patch("utils.requests.get")
+    def test_read_only_wled_probe_reports_firmware_and_led_count(self, get):
+        response = Mock()
+        response.json.return_value = {
+            "ver": "0.15.1",
+            "name": "MoonBoard WLED",
+            "leds": {"count": 300},
+        }
+        get.return_value = response
+
+        result = utils.probe_wled_controller(0)
+
+        self.assertTrue(result["reachable"])
+        self.assertEqual(result["firmware_version"], "0.15.1")
+        self.assertEqual(result["device_name"], "MoonBoard WLED")
+        self.assertEqual(result["reported_led_count"], 300)
+        self.assertEqual(result["configured_led_count"], 3)
+        get.assert_called_once_with(
+            "http://192.0.2.10/json/info",
+            timeout=1.25,
+        )
+
+    @patch("utils.requests.post")
+    def test_failed_controller_does_not_block_remaining_controller(self, post):
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 102},
+            {"ip": "192.0.2.11", "start": 200, "end": 202},
+        ]
+        config.hole2LEDS = {0: [200]}
+
+        def respond(url, **_kwargs):
+            if "192.0.2.10" in url:
+                raise utils.requests.Timeout("controller offline")
+            return Mock()
+
+        post.side_effect = respond
+
+        result = utils.sendLightToBoulderwall({0: "start"})
+
+        self.assertEqual(result, {200: "FF0000"})
+        self.assertEqual(result.operation["status"], "partial")
+        self.assertEqual(
+            [item["index"] for item in result.operation["failed_controllers"]],
+            [0],
+        )
+        self.assertEqual(
+            [item["index"] for item in result.operation["successful_controllers"]],
+            [1],
+        )
+        self.assertEqual(
+            [call.args[0] for call in post.call_args_list],
+            [
+                "http://192.0.2.10/json/state",
+                "http://192.0.2.11/json/state",
+                "http://192.0.2.11/json/state",
+            ],
+        )
+        self.assertTrue(all(call.kwargs["timeout"] == 1.25 for call in post.call_args_list))
+
+    @patch("utils.requests.post")
+    def test_celebration_skips_failed_controller(self, post):
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 102},
+            {"ip": "192.0.2.11", "start": 200, "end": 202},
+        ]
+
+        def respond(url, **_kwargs):
+            if "192.0.2.10" in url:
+                raise utils.requests.Timeout("controller offline")
+            return Mock()
+
+        post.side_effect = respond
+
+        report = utils.playCelebrationEffect("rainbow")
+
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(len(report["failed_controllers"]), 1)
+        self.assertEqual(len(report["successful_controllers"]), 1)
+        self.assertEqual(len(post.call_args_list), 3)
+
+    def test_status_page_uses_prefix_and_explains_read_only_test(self):
+        html = main.return_status_html("/cruxwledbridge")
+
+        self.assertIn('const dataUrl = "/cruxwledbridge/status/data"', html)
+        self.assertIn('const testUrl = "/cruxwledbridge/status/wled"', html)
+        self.assertIn('"controller.firmware":"Firmware"', html)
+        self.assertIn("verändern die Beleuchtung nicht", html)
+        self.assertIn("firmware_version", html)
+        self.assertIn("fetch(`${testUrl}/${index}/test`", html)
+
+    @patch("main.check_crux_api_status")
+    @patch("main.check_database_status")
+    @patch("main.probe_all_wled_controllers")
+    def test_status_data_combines_live_system_checks(self, probe, database, crux):
+        probe.return_value = [{"index": 0, "reachable": True}]
+        database.return_value = {"reachable": True}
+        crux.return_value = {"reachable": True}
+
+        result = asyncio.run(main.status_data())
+
+        self.assertEqual(result["wled_controllers"], probe.return_value)
+        self.assertEqual(result["database"], database.return_value)
+        self.assertEqual(result["crux_api"], crux.return_value)
+        self.assertIn("route_diagnostics", result)
+        self.assertIn("lighting", result)
+
+    def test_database_status_runs_a_real_read_only_query(self):
+        result = main.check_database_status()
+
+        self.assertTrue(result["reachable"])
+        self.assertIn("wall_count", result)
+        self.assertIn("mapping_count", result)
+        self.assertGreaterEqual(result["response_ms"], 0)
+
+    @patch("main.requests.get")
+    @patch("main.SessionLocal")
+    def test_crux_status_uses_saved_wall_with_timeout(self, session_local, get):
+        wall = Mock(id=216943)
+        session_local.return_value.query.return_value.order_by.return_value.first.return_value = wall
+        get.return_value = Mock()
+
+        result = main.check_crux_api_status()
+
+        self.assertTrue(result["reachable"])
+        self.assertEqual(result["wall_id"], 216943)
+        get.assert_called_once_with(
+            "https://www.cruxapp.ca/api/v1/gym_walls/216943",
+            headers=main.auth_header,
+            verify=False,
+            timeout=3,
+        )
+        session_local.return_value.close.assert_called_once_with()
+
+    @patch("main.schedule_route_timeout")
+    @patch("main.sendLightToBoulderwall")
+    @patch("main.SessionLocal")
+    def test_viewed_reports_partial_controller_failure(
+        self,
+        session_local,
+        send_lights,
+        schedule_timeout,
+    ):
+        operation = {
+            "status": "partial",
+            "successful_controllers": [{"address": "http://192.0.2.11"}],
+            "failed_controllers": [{"address": "http://192.0.2.10"}],
+        }
+        send_lights.return_value = utils.LightingResult({}, operation)
+        response = asyncio.run(main.viewed(
+            self.viewed_payload(),
+            AccessLoggingTests.make_request(),
+        ))
+        body = json.loads(response.body)
+
+        self.assertEqual(response.status_code, 207)
+        self.assertEqual(body["status"], "partial")
+        self.assertEqual(body["controllers"], {"successful": 1, "failed": 1})
+        schedule_timeout.assert_called_once_with()
+        diagnostics = main.get_route_diagnostics()
+        self.assertEqual(diagnostics["last_route_request"]["status"], "partial")
+        self.assertIsNone(diagnostics["last_successful_route"])
+        self.assertIn("192.0.2.10", diagnostics["last_route_error"]["error"])
+        session_local.return_value.close.assert_called_once_with()
+
+    @patch("main.schedule_route_timeout")
+    @patch("main.sendLightToBoulderwall")
+    @patch("main.SessionLocal")
+    def test_viewed_returns_service_unavailable_when_all_controllers_fail(
+        self,
+        session_local,
+        send_lights,
+        schedule_timeout,
+    ):
+        operation = {
+            "status": "failed",
+            "successful_controllers": [],
+            "failed_controllers": [{"address": "http://192.0.2.10"}],
+        }
+        send_lights.return_value = utils.LightingResult({}, operation)
+
+        response = asyncio.run(main.viewed(
+            self.viewed_payload(902),
+            AccessLoggingTests.make_request(),
+        ))
+
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(main._route_lighting_active)
+        schedule_timeout.assert_not_called()
+        session_local.return_value.close.assert_called_once_with()
+
+    @patch("main.sendLightToBoulderwall", side_effect=RuntimeError("render broke"))
+    @patch("main.SessionLocal")
+    def test_viewed_logs_and_returns_error_instead_of_swallowing_it(
+        self,
+        session_local,
+        _send_lights,
+    ):
+        with patch.object(logging.getLogger("cruxwledbridge"), "exception") as logged:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(main.viewed(
+                    self.viewed_payload(903),
+                    AccessLoggingTests.make_request(),
+                ))
+
+        self.assertEqual(raised.exception.status_code, 500)
+        logged.assert_called_once()
+        self.assertIn(
+            "render broke",
+            main.get_route_diagnostics()["last_route_error"]["error"],
+        )
+        session_local.return_value.close.assert_called_once_with()
+
+
 class WledTests(unittest.TestCase):
     def setUp(self):
         config.colors = {"start": "FF0000"}
@@ -2718,6 +3001,7 @@ class WledTests(unittest.TestCase):
                 call(
                     "http://192.0.2.10/json/state",
                     json={"on": False, "bri": 255},
+                    timeout=2.0,
                 ),
                 call(
                     "http://192.0.2.10/json/state",
@@ -2726,6 +3010,7 @@ class WledTests(unittest.TestCase):
                         "bri": 255,
                         "seg": {"fx": 0, "i": [1, "FF0000"]},
                     },
+                    timeout=2.0,
                 ),
             ],
         )
@@ -2755,6 +3040,7 @@ class WledTests(unittest.TestCase):
                         ],
                     },
                 },
+                timeout=2.0,
             ),
         )
 
@@ -2883,6 +3169,7 @@ class WledTests(unittest.TestCase):
                     "bri": 255,
                     "seg": {"fx": 0, "i": [2, "FF0000", 3, "FF0000"]},
                 },
+                timeout=2.0,
             ),
         )
 
@@ -2968,6 +3255,7 @@ class WledTests(unittest.TestCase):
                     "bri": 255,
                     "seg": {"i": [2, "00FF00"]},
                 },
+                timeout=2.0,
             ),
         )
 
