@@ -295,6 +295,124 @@ def positions_near_holds(holds, grids, proximity_ratio=0.45):
     return occupied_positions
 
 
+def map_virtual_grid_to_physical_leds(
+    virtual_grid,
+    saved_settings,
+    hole2leds,
+    target_width=None,
+    target_height=None,
+):
+    """Match virtual cable-order positions to physical LEDs across all grids."""
+    if not isinstance(saved_settings, dict):
+        raise ValueError("A saved wall mapping is required")
+
+    saved_grids = saved_settings.get("grids")
+    if not isinstance(saved_grids, list) or not saved_grids:
+        saved_grids = [saved_settings]
+
+    source_width = saved_settings.get("coordinate_width") or target_width
+    source_height = saved_settings.get("coordinate_height") or target_height
+    try:
+        scale_x = (
+            float(target_width) / float(source_width)
+            if target_width and source_width
+            else 1.0
+        )
+        scale_y = (
+            float(target_height) / float(source_height)
+            if target_height and source_height
+            else 1.0
+        )
+    except (TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError("Wall mapping coordinate dimensions are invalid") from exc
+
+    active_positions = []
+    for saved_grid in saved_grids:
+        if not isinstance(saved_grid, dict):
+            continue
+        positions = saved_grid.get("positions", {})
+        position_led_ids = saved_grid.get("position_led_ids", {})
+        if not isinstance(positions, dict) or not isinstance(position_led_ids, dict):
+            continue
+
+        for raw_position_id, raw_logical_led_id in position_led_ids.items():
+            coordinates = positions.get(raw_position_id)
+            if coordinates is None:
+                coordinates = positions.get(str(raw_position_id))
+            if coordinates is None:
+                try:
+                    coordinates = positions.get(int(raw_position_id))
+                except (TypeError, ValueError):
+                    coordinates = None
+            try:
+                x, y = coordinates
+                logical_led_id = int(raw_logical_led_id)
+                x = float(x) * scale_x
+                y = float(y) * scale_y
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite((x, y)).all():
+                continue
+            active_positions.append((logical_led_id, x, y))
+
+    if not active_positions:
+        raise ValueError("The saved wall mapping has no active LED positions")
+    if not isinstance(virtual_grid, dict) or not virtual_grid:
+        raise ValueError("The virtual grid has no positions")
+
+    matches = []
+    flattened_physical_led_ids = []
+    for virtual_position_id in sorted(virtual_grid):
+        try:
+            virtual_x, virtual_y = virtual_grid[virtual_position_id]
+            virtual_x = float(virtual_x)
+            virtual_y = float(virtual_y)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("The virtual grid contains invalid coordinates") from exc
+
+        logical_led_id, source_x, source_y = min(
+            active_positions,
+            key=lambda position: (
+                (position[1] - virtual_x) ** 2
+                + (position[2] - virtual_y) ** 2,
+                position[0],
+            ),
+        )
+        physical_led_ids = hole2leds.get(logical_led_id)
+        if physical_led_ids is None:
+            physical_led_ids = hole2leds.get(str(logical_led_id))
+        if isinstance(physical_led_ids, int):
+            physical_led_ids = [physical_led_ids]
+        if not isinstance(physical_led_ids, (list, tuple)) or not physical_led_ids:
+            raise ValueError(
+                f"Logical LED {logical_led_id} has no physical hole2LEDS mapping"
+            )
+        try:
+            physical_led_ids = [int(led_id) for led_id in physical_led_ids]
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Logical LED {logical_led_id} has an invalid hole2LEDS mapping"
+            ) from exc
+
+        distance = float(np.hypot(source_x - virtual_x, source_y - virtual_y))
+        flattened_physical_led_ids.extend(physical_led_ids)
+        matches.append({
+            "virtual_position_id": int(virtual_position_id),
+            "virtual_x": round(virtual_x),
+            "virtual_y": round(virtual_y),
+            "logical_led_id": logical_led_id,
+            "physical_led_ids": physical_led_ids,
+            "source_x": round(source_x),
+            "source_y": round(source_y),
+            "distance": distance,
+        })
+
+    return {
+        "matches": matches,
+        "physical_led_ids": flattened_physical_led_ids,
+    }
+
+
 def ledCalculation(holds, full_grid, position_led_ids):
     holds2led = {}
     for hold in holds:

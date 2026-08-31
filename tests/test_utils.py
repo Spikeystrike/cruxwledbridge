@@ -1023,6 +1023,9 @@ class WallEndpointTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         self.assertIn("Kontors Keller", html)
         self.assertIn("/wallcreation?id=216943", html)
+        self.assertIn("/virtualmapping?id=216943", html)
+        self.assertIn("Virtual MoonBoard mapping", html)
+        self.assertIn("Virtuelle MoonBoard-Zuordnung", html)
         self.assertIn('<html lang="en">', html)
         self.assertIn('id="language-toggle"', html)
         self.assertIn('data-i18n="page.heading">Wall selector</h1>', html)
@@ -1053,6 +1056,10 @@ class WallEndpointTests(unittest.TestCase):
 
         self.assertIn(
             'href="/cruxwledbridge/wallcreation?id=216943"',
+            result.body.decode(),
+        )
+        self.assertIn(
+            'href="/cruxwledbridge/virtualmapping?id=216943"',
             result.body.decode(),
         )
 
@@ -1780,6 +1787,8 @@ class PathPrefixTests(unittest.TestCase):
         self.assertTrue(any(path == "/sent" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/settings" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/route_timeout" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/virtualmapping" and "GET" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/virtualmapping/calculate" and "POST" in methods for path, methods in routes))
         self.assertFalse(any(path in {"/toggle_gui", "/toggle_mode"} for path, _ in routes))
 
     def test_wall_lighting_mode_updates_server_state(self):
@@ -1910,6 +1919,10 @@ class PathPrefixTests(unittest.TestCase):
         )
 
         self.assertIn("fetch('/cruxwledbridge/defineholds'", html)
+        self.assertIn(
+            'href="/cruxwledbridge/virtualmapping?id=216943"',
+            html,
+        )
 
     def test_wall_selector_offers_alternating_grid(self):
         html = main.returnwallhtml(
@@ -2225,6 +2238,165 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("let offset = 0", html)
         self.assertIn("grid.led_start = offset", html)
         self.assertIn("offset += activeIds.length", html)
+
+
+class VirtualMappingTests(unittest.TestCase):
+    wall_id = 987670
+
+    def setUp(self):
+        self.original_hole2leds = config.hole2LEDS
+        config.hole2LEDS = {0: [500], 1: [600, 601]}
+        db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
+        db.query(main.WallDB).filter(
+            main.WallDB.id == self.wall_id
+        ).delete(synchronize_session=False)
+        db.add(main.WallDB(
+            id=self.wall_id,
+            angle_adjustable=False,
+            created_at="2026-01-01",
+            name="MoonBoard wall",
+            updated_at="2026-01-02",
+            image_height=100,
+            image_width=100,
+            image_url="https://example.com/wall.jpg",
+            holds=[],
+        ))
+        db.add(main.WallCreationDB(
+            wallid=self.wall_id,
+            settings={
+                "coordinate_space": "wall_image",
+                "coordinate_width": 100,
+                "coordinate_height": 100,
+                "grids": [
+                    {
+                        "positions": {"0": [0, 0]},
+                        "position_led_ids": {"0": 0},
+                    },
+                    {
+                        "positions": {"0": [100, 0]},
+                        "position_led_ids": {"0": 1},
+                    },
+                ],
+            },
+        ))
+        db.commit()
+        db.close()
+
+    def tearDown(self):
+        config.hole2LEDS = self.original_hole2leds
+        db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
+        db.query(main.WallDB).filter(
+            main.WallDB.id == self.wall_id
+        ).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+    def test_virtual_mapping_page_is_temporary_and_uses_path_prefix(self):
+        with patch("main.APP_PATH_PREFIX", "/cruxwledbridge"):
+            response = asyncio.run(main.virtual_mapping(str(self.wall_id)))
+        html = response.body.decode()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("MoonBoard wall", html)
+        self.assertIn('src="https://example.com/wall.jpg"', html)
+        self.assertIn("fetch('/cruxwledbridge/virtualmapping/calculate'", html)
+        self.assertIn('id="rows" type="number" min="1" step="1" value="18"', html)
+        self.assertIn('id="columns" type="number" min="1" step="1" value="11"', html)
+        self.assertIn('id="led-start-corner"', html)
+        self.assertIn('id="led-direction"', html)
+        self.assertIn("physicalIds.join(', ')", html)
+        self.assertIn("navigator.clipboard.writeText(output.value)", html)
+        self.assertIn("wird nicht gespeichert", html)
+        self.assertNotIn("/defineholds", html)
+        self.assertNotIn('id="grid-tabs"', html)
+
+    def test_virtual_mapping_matches_across_grids_and_flattens_physical_leds(self):
+        db = main.SessionLocal()
+        before = db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).first().settings
+        db.close()
+
+        result = asyncio.run(main.calculate_virtual_mapping(
+            main.VirtualMappingRequest(
+                wallid=self.wall_id,
+                p1x=0,
+                p1y=0,
+                p2x=100,
+                p2y=0,
+                p3x=100,
+                p3y=100,
+                p4x=0,
+                p4y=100,
+                r=1,
+                c=2,
+                led_start_corner="top_left",
+                led_direction="horizontal",
+            )
+        ))
+
+        self.assertEqual(result["physical_led_ids"], [500, 600, 601])
+        self.assertEqual(
+            [match["logical_led_id"] for match in result["matches"]],
+            [0, 1],
+        )
+        self.assertEqual(result["matches"][1]["physical_led_ids"], [600, 601])
+        db = main.SessionLocal()
+        after = db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).first().settings
+        db.close()
+        self.assertEqual(after, before)
+
+    def test_virtual_mapping_scales_saved_coordinates_to_current_wall_image(self):
+        result = utils.map_virtual_grid_to_physical_leds(
+            {0: (20, 20), 1: (180, 20)},
+            {
+                "coordinate_width": 100,
+                "coordinate_height": 100,
+                "grids": [{
+                    "positions": {"0": [10, 10], "1": [90, 10]},
+                    "position_led_ids": {"0": 0, "1": 1},
+                }],
+            },
+            config.hole2LEDS,
+            target_width=200,
+            target_height=200,
+        )
+
+        self.assertEqual(result["physical_led_ids"], [500, 600, 601])
+        self.assertEqual(result["matches"][0]["source_x"], 20)
+        self.assertEqual(result["matches"][1]["source_x"], 180)
+
+    def test_virtual_mapping_requires_physical_hole_mapping(self):
+        with self.assertRaisesRegex(ValueError, "no physical hole2LEDS mapping"):
+            utils.map_virtual_grid_to_physical_leds(
+                {0: (0, 0)},
+                {
+                    "positions": {"0": [0, 0]},
+                    "position_led_ids": {"0": 7},
+                },
+                {},
+            )
+
+    def test_virtual_mapping_requires_saved_wall_mapping(self):
+        db = main.SessionLocal()
+        db.query(main.WallCreationDB).filter(
+            main.WallCreationDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(main.virtual_mapping(str(self.wall_id)))
+
+        self.assertEqual(raised.exception.status_code, 404)
 
 
 class HoldLightingDirectionTests(unittest.TestCase):

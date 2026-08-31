@@ -8,6 +8,7 @@ TRANSLATIONS = {
     "en": {
         "page.title": "Climbing wall – select points",
         "page.heading": "Climbing wall – select points",
+        "page.virtual_mapping": "Open virtual MoonBoard mapping",
         "tabs.add": "Add grid",
         "tabs.grid": "Grid {number}",
         "tabs.range": "LED {start}–{end}",
@@ -56,6 +57,7 @@ TRANSLATIONS = {
     "de": {
         "page.title": "Kletterwand – Punkte auswählen",
         "page.heading": "Kletterwand – Punkte auswählen",
+        "page.virtual_mapping": "Virtuelle MoonBoard-Zuordnung öffnen",
         "tabs.add": "Raster hinzufügen",
         "tabs.grid": "Raster {number}",
         "tabs.range": "LED {start}–{end}",
@@ -111,6 +113,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         "__WALL_IMAGE_HEIGHT__": json.dumps(wall.get("image_height")),
         "__WALL_ID__": str(wall["id"]),
         "__PATH_PREFIX__": path_prefix,
+        "__VIRTUAL_MAPPING_URL__": f"{path_prefix}/virtualmapping?id={wall['id']}",
         "__IMAGE_URL__": escape(str(wall["image_url"]), quote=True),
         "__LANGUAGE_SWITCH__": language_switch_html(TRANSLATIONS),
     }
@@ -124,6 +127,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f0f0; margin: 20px; }
         h1 { color: #333; }
+        .secondary-link { display: inline-block; margin-bottom: 16px; color: #0056b3; }
         #grid-tabs { display: flex; align-items: stretch; gap: 8px; width: min(100%, 900px); overflow-x: auto; padding: 4px 2px 10px; }
         .grid-tab { display: flex; flex: 0 0 auto; align-items: stretch; border: 1px solid #aaa; border-radius: 7px; background: #ddd; overflow: hidden; }
         .grid-tab.dragging { opacity: 0.45; }
@@ -151,6 +155,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 </head>
 <body>
     <h1 data-i18n="page.heading">Climbing wall – select points</h1>
+    <a class="secondary-link" href="__VIRTUAL_MAPPING_URL__" data-i18n="page.virtual_mapping">Open virtual MoonBoard mapping</a>
     <div id="grid-tabs" role="tablist" aria-label="Grids"></div>
     <div>
         <div class="form-row">

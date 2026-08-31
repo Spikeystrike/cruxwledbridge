@@ -18,6 +18,7 @@ from utils import (
     generate_grid_position_layout,
     ledCalculation,
     lightUpHoldId,
+    map_virtual_grid_to_physical_leds,
     playCelebrationEffect,
     positions_near_holds,
     sendLightToBoulderwall,
@@ -32,6 +33,7 @@ from templates.wallselector import returnwallhtml
 from templates.language import language_switch_html
 from templates.overview import return_overview_html
 from templates.settings import return_settings_html
+from templates.virtual_mapping import return_virtual_mapping_html
 from config_loader import config
 Base = declarative_base()
 # SQLAlchemy Model for Wall
@@ -451,10 +453,14 @@ WALL_LIST_TRANSLATIONS = {
     "en": {
         "page.title": "Wall selector",
         "page.heading": "Wall selector",
+        "wall.creation": "Edit wall mapping",
+        "wall.virtual_mapping": "Virtual MoonBoard mapping",
     },
     "de": {
         "page.title": "Wandauswahl",
         "page.heading": "Wandauswahl",
+        "wall.creation": "Wandzuordnung bearbeiten",
+        "wall.virtual_mapping": "Virtuelle MoonBoard-Zuordnung",
     },
 }
 
@@ -642,6 +648,10 @@ class WallTranslation(GridTranslation):
 class MultiGridWallTranslation(BaseModel):
     wallid: int
     grids: List[GridTranslation]
+
+
+class VirtualMappingRequest(GridTranslation):
+    wallid: int
 
 
 class Climb(BaseModel):
@@ -940,7 +950,13 @@ async def list_walls(gym: str = ""):
         wall_cards.append(
             f'<div style="margin-bottom:20px;"><h2>{wall_name}</h2>'
             f'<a href="{APP_PATH_PREFIX}/wallcreation?id={wall_id}"><img src="{image_url}" '
-            f'alt="{wall_name}" style="max-width:300px;"></a></div>'
+            f'alt="{wall_name}" style="max-width:300px;"></a>'
+            f'<div class="wall-actions">'
+            f'<a href="{APP_PATH_PREFIX}/wallcreation?id={wall_id}" '
+            f'data-i18n="wall.creation">Edit wall mapping</a>'
+            f'<a href="{APP_PATH_PREFIX}/virtualmapping?id={wall_id}" '
+            f'data-i18n="wall.virtual_mapping">Virtual MoonBoard mapping</a>'
+            f'</div></div>'
         )
     language_switch = language_switch_html(WALL_LIST_TRANSLATIONS)
     favorite_gym_slug = escape(gym, quote=True)
@@ -962,6 +978,8 @@ async def list_walls(gym: str = ""):
                     max-width: 300px;
                     height: auto;
                 }}
+                .wall-actions {{ display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }}
+                .wall-actions a {{ color: #0056b3; }}
             </style>
         </head>
         <body>
@@ -984,6 +1002,95 @@ async def list_walls(gym: str = ""):
         </html>
     """
     return HTMLResponse(content=html_content)
+
+
+@app.get("/virtualmapping", response_class=HTMLResponse)
+async def virtual_mapping(id: str = ""):
+    id = id.strip()
+    if not id:
+        raise HTTPException(status_code=400, detail="Please send a wall id")
+    try:
+        wall_id = int(id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid wall id") from exc
+
+    db = SessionLocal()
+    try:
+        wall = db.query(WallDB).filter(WallDB.id == wall_id).first()
+        saved_creation = db.query(WallCreationDB).filter(
+            WallCreationDB.wallid == wall_id
+        ).first()
+        if wall is None:
+            raise HTTPException(status_code=404, detail="Wall not found")
+        if saved_creation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Create and save the wall mapping first",
+            )
+        wall_data = {
+            "id": wall.id,
+            "name": wall.name,
+            "image_url": wall.image_url,
+            "image_width": wall.image_width,
+            "image_height": wall.image_height,
+        }
+    finally:
+        db.close()
+
+    return HTMLResponse(content=return_virtual_mapping_html(
+        wall_data,
+        APP_PATH_PREFIX,
+    ))
+
+
+@app.post("/virtualmapping/calculate")
+async def calculate_virtual_mapping(payload: VirtualMappingRequest):
+    db = SessionLocal()
+    try:
+        wall = db.query(WallDB).filter(WallDB.id == payload.wallid).first()
+        saved_creation = db.query(WallCreationDB).filter(
+            WallCreationDB.wallid == payload.wallid
+        ).first()
+        if wall is None:
+            raise HTTPException(status_code=404, detail="Wall not found")
+        if saved_creation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Create and save the wall mapping first",
+            )
+        saved_settings = saved_creation.settings
+        wall_width = wall.image_width
+        wall_height = wall.image_height
+    finally:
+        db.close()
+
+    try:
+        virtual_grid = generate_grid(
+            (payload.p1x, payload.p1y),
+            (payload.p2x, payload.p2y),
+            (payload.p3x, payload.p3y),
+            (payload.p4x, payload.p4y),
+            payload.r,
+            payload.c,
+            alternating=payload.alternating,
+            alternating_start_column=payload.alternating_start_column,
+            led_start_corner=payload.led_start_corner,
+            led_direction=payload.led_direction,
+        )
+        mapping = map_virtual_grid_to_physical_leds(
+            virtual_grid,
+            saved_settings,
+            config.hole2LEDS,
+            target_width=wall_width,
+            target_height=wall_height,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "matches": mapping["matches"],
+        "physical_led_ids": mapping["physical_led_ids"],
+    }
 
 @app.get ("/wallcreation")
 async def wall_creation(id: str = ""):
