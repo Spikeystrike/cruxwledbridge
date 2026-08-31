@@ -1790,6 +1790,9 @@ class PathPrefixTests(unittest.TestCase):
         self.assertTrue(any(path == "/route_timeout" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping/calculate" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/virtualmapping/mappings" and "GET" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/virtualmapping/mappings" and "POST" in methods for path, methods in routes))
+        self.assertTrue(any(path == "/virtualmapping/mappings/{mapping_id}" and "DELETE" in methods for path, methods in routes))
         self.assertTrue(any(path == "/virtualmapping/preview" and "POST" in methods for path, methods in routes))
         self.assertTrue(any(path == "/status" and "GET" in methods for path, methods in routes))
         self.assertTrue(any(path == "/status/data" and "GET" in methods for path, methods in routes))
@@ -2252,6 +2255,9 @@ class VirtualMappingTests(unittest.TestCase):
         self.original_hole2leds = config.hole2LEDS
         config.hole2LEDS = {0: [500], 1: [600, 601]}
         db = main.SessionLocal()
+        db.query(main.MoonBoardMappingDB).filter(
+            main.MoonBoardMappingDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
         db.query(main.WallCreationDB).filter(
             main.WallCreationDB.wallid == self.wall_id
         ).delete(synchronize_session=False)
@@ -2275,6 +2281,7 @@ class VirtualMappingTests(unittest.TestCase):
                 "coordinate_space": "wall_image",
                 "coordinate_width": 100,
                 "coordinate_height": 100,
+                "holds2led": {"hold-a": 0, "hold-b": 1},
                 "grids": [
                     {
                         "positions": {"0": [0, 0]},
@@ -2293,6 +2300,9 @@ class VirtualMappingTests(unittest.TestCase):
     def tearDown(self):
         config.hole2LEDS = self.original_hole2leds
         db = main.SessionLocal()
+        db.query(main.MoonBoardMappingDB).filter(
+            main.MoonBoardMappingDB.wallid == self.wall_id
+        ).delete(synchronize_session=False)
         db.query(main.WallCreationDB).filter(
             main.WallCreationDB.wallid == self.wall_id
         ).delete(synchronize_session=False)
@@ -2302,7 +2312,7 @@ class VirtualMappingTests(unittest.TestCase):
         db.commit()
         db.close()
 
-    def test_virtual_mapping_page_is_temporary_and_uses_path_prefix(self):
+    def test_virtual_mapping_page_keeps_temporary_mode_and_uses_path_prefix(self):
         with patch("main.APP_PATH_PREFIX", "/cruxwledbridge"):
             response = asyncio.run(main.virtual_mapping(str(self.wall_id)))
         html = response.body.decode()
@@ -2312,6 +2322,7 @@ class VirtualMappingTests(unittest.TestCase):
         self.assertIn('src="https://example.com/wall.jpg"', html)
         self.assertIn("fetch('/cruxwledbridge/virtualmapping/calculate'", html)
         self.assertIn("const previewUrl = '/cruxwledbridge/virtualmapping/preview'", html)
+        self.assertIn("const mappingsUrl = '/cruxwledbridge/virtualmapping/mappings'", html)
         self.assertIn('id="rows" type="number" min="1" step="1" value="12"', html)
         self.assertIn('id="columns" type="number" min="1" step="1" value="11"', html)
         self.assertIn('id="led-start-corner"', html)
@@ -2322,7 +2333,13 @@ class VirtualMappingTests(unittest.TestCase):
         self.assertIn("physical_led_ids: ids, enabled", html)
         self.assertIn("navigator.sendBeacon(previewUrl, body)", html)
         self.assertIn("Vorschau beenden und Beleuchtung wiederherstellen", html)
-        self.assertIn("wird nicht gespeichert", html)
+        self.assertIn("Temporäre / neue Zuordnung", html)
+        self.assertIn("Mini MoonBoard 2020", html)
+        self.assertIn("Mini MoonBoard 2025", html)
+        self.assertIn("MoonBoard 2016", html)
+        self.assertIn("MoonBoard 2024", html)
+        self.assertIn('id="save-button"', html)
+        self.assertIn('id="saved-mapping-select"', html)
         self.assertNotIn("/defineholds", html)
         self.assertNotIn('id="grid-tabs"', html)
 
@@ -2434,6 +2451,11 @@ class VirtualMappingTests(unittest.TestCase):
             [match["logical_led_id"] for match in result["matches"]],
             [0, 1],
         )
+        self.assertEqual(
+            [match["moonboard_hold_label"] for match in result["matches"]],
+            ["A1", "B1"],
+        )
+        self.assertEqual(result["matches"][0]["crux_hold_ids"], ["hold-a"])
         self.assertEqual(result["matches"][1]["physical_led_ids"], [600, 601])
         db = main.SessionLocal()
         after = db.query(main.WallCreationDB).filter(
@@ -2441,6 +2463,158 @@ class VirtualMappingTests(unittest.TestCase):
         ).first().settings
         db.close()
         self.assertEqual(after, before)
+
+    def _saved_mapping_request(self, **overrides):
+        values = {
+            "wallid": self.wall_id,
+            "name": "Mini left",
+            "board_type": "mini",
+            "setup": "mini_2020",
+            "p1x": 0,
+            "p1y": 0,
+            "p2x": 100,
+            "p2y": 0,
+            "p3x": 100,
+            "p3y": 100,
+            "p4x": 0,
+            "p4y": 100,
+            "r": 12,
+            "c": 11,
+            "led_start_corner": "bottom_left",
+            "led_direction": "vertical",
+        }
+        values.update(overrides)
+        return main.SavedMoonBoardMappingRequest(**values)
+
+    def test_saved_mapping_persists_board_setup_holds_and_leds(self):
+        result = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request()
+        ))
+
+        saved = result["mapping"]
+        self.assertEqual(saved["name"], "Mini left")
+        self.assertEqual(saved["board_type"], "mini")
+        self.assertEqual(saved["setup"], "mini_2020")
+        self.assertEqual(saved["mapping"]["boardsesh_layout_id"], 6)
+        self.assertEqual(len(saved["mapping"]["matches"]), 132)
+        self.assertEqual(saved["mapping"]["matches"][0]["moonboard_hold_id"], 1)
+        self.assertEqual(saved["mapping"]["matches"][0]["moonboard_hold_label"], "A1")
+        self.assertEqual(saved["mapping"]["matches"][0]["crux_hold_ids"], ["hold-a"])
+        self.assertEqual(saved["mapping"]["physical_led_ids"][0], 500)
+
+        db = main.SessionLocal()
+        stored = db.query(main.MoonBoardMappingDB).filter(
+            main.MoonBoardMappingDB.id == saved["id"]
+        ).one()
+        db.close()
+        self.assertEqual(stored.settings["coordinate_width"], 100)
+        self.assertEqual(stored.settings["coordinate_height"], 100)
+
+    def test_multiple_saved_installations_can_use_the_same_setup(self):
+        first = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request(name="Mini left")
+        ))["mapping"]
+        second = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request(name="Mini right")
+        ))["mapping"]
+
+        self.assertNotEqual(first["id"], second["id"])
+        listed = asyncio.run(main.list_saved_moonboard_mappings(
+            self.wall_id
+        ))["mappings"]
+        self.assertEqual(
+            [(mapping["name"], mapping["setup"]) for mapping in listed],
+            [("Mini left", "mini_2020"), ("Mini right", "mini_2020")],
+        )
+
+    def test_saved_mapping_can_be_updated_without_creating_a_duplicate(self):
+        created = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request()
+        ))["mapping"]
+
+        updated = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request(
+                mapping_id=created["id"],
+                name="Mini left updated",
+                setup="mini_2025",
+            )
+        ))["mapping"]
+
+        self.assertEqual(updated["id"], created["id"])
+        self.assertEqual(updated["setup"], "mini_2025")
+        self.assertEqual(updated["mapping"]["boardsesh_layout_id"], 7)
+        db = main.SessionLocal()
+        count = db.query(main.MoonBoardMappingDB).filter(
+            main.MoonBoardMappingDB.wallid == self.wall_id
+        ).count()
+        db.close()
+        self.assertEqual(count, 1)
+
+    def test_saved_mapping_rejects_duplicate_name_for_same_wall(self):
+        asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request()
+        ))
+
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(main.save_moonboard_mapping(
+                self._saved_mapping_request()
+            ))
+
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_saved_mapping_requires_dimensions_for_selected_board(self):
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(main.save_moonboard_mapping(
+                self._saved_mapping_request(r=18)
+            ))
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("12 x 11", raised.exception.detail)
+
+    def test_saved_mapping_can_select_standard_board_setup(self):
+        saved = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request(
+                name="Standard board",
+                board_type="standard",
+                setup="standard_2016",
+                r=18,
+            )
+        ))["mapping"]
+
+        self.assertEqual(saved["mapping"]["boardsesh_layout_id"], 2)
+        self.assertEqual(len(saved["mapping"]["matches"]), 198)
+
+    def test_saved_mapping_is_available_on_page_and_can_be_deleted(self):
+        saved = asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request()
+        ))["mapping"]
+
+        response = asyncio.run(main.virtual_mapping(str(self.wall_id)))
+        html = response.body.decode()
+        self.assertIn("Mini left", html)
+        self.assertIn(saved["id"], html)
+
+        deleted = asyncio.run(main.delete_moonboard_mapping(
+            saved["id"],
+            self.wall_id,
+        ))
+        self.assertEqual(deleted["message"], "MoonBoard mapping deleted")
+        listed = asyncio.run(main.list_saved_moonboard_mappings(
+            self.wall_id
+        ))["mappings"]
+        self.assertEqual(listed, [])
+
+    def test_saved_mapping_name_cannot_terminate_embedded_script(self):
+        unsafe_name = "</script><script>alert('mapping')</script>"
+        asyncio.run(main.save_moonboard_mapping(
+            self._saved_mapping_request(name=unsafe_name)
+        ))
+
+        response = asyncio.run(main.virtual_mapping(str(self.wall_id)))
+        html = response.body.decode()
+
+        self.assertNotIn(unsafe_name, html)
+        self.assertIn("<\\/script><script>alert('mapping')<\\/script>", html)
 
     def test_virtual_mapping_scales_saved_coordinates_to_current_wall_image(self):
         result = utils.map_virtual_grid_to_physical_leds(

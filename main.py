@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from html import escape
 from urllib.parse import quote
+from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request, logger
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
@@ -80,6 +81,19 @@ class AppSettingDB(Base):
     key = Column(String, primary_key=True)
     value = Column(JSON, nullable=False)
 
+
+class MoonBoardMappingDB(Base):
+    __tablename__ = "moonboard_mappings"
+
+    id = Column(String, primary_key=True, index=True)
+    wallid = Column(Integer, ForeignKey("walls.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    board_type = Column(String, nullable=False)
+    setup = Column(String, nullable=False)
+    settings = Column(JSON, nullable=False)
+    created_at = Column(String, nullable=False)
+    updated_at = Column(String, nullable=False)
+
 # SQLite engine and session setup
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////code/db/app.db")
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
@@ -115,6 +129,54 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(root_path=APP_PATH_PREFIX, lifespan=lifespan)
 
 HOLD_LIGHTING_DIRECTIONS = {"below", "above", "both"}
+MOONBOARD_SETUPS = {
+    "mini": {
+        "mini_2020": {
+            "label": "Mini MoonBoard 2020",
+            "boardsesh_layout_id": 6,
+            "rows": 12,
+            "columns": 11,
+        },
+        "mini_2025": {
+            "label": "Mini MoonBoard 2025",
+            "boardsesh_layout_id": 7,
+            "rows": 12,
+            "columns": 11,
+        },
+    },
+    "standard": {
+        "standard_2010": {
+            "label": "MoonBoard 2010",
+            "boardsesh_layout_id": 1,
+            "rows": 18,
+            "columns": 11,
+        },
+        "standard_2016": {
+            "label": "MoonBoard 2016",
+            "boardsesh_layout_id": 2,
+            "rows": 18,
+            "columns": 11,
+        },
+        "standard_2024": {
+            "label": "MoonBoard 2024",
+            "boardsesh_layout_id": 3,
+            "rows": 18,
+            "columns": 11,
+        },
+        "standard_masters_2017": {
+            "label": "MoonBoard Masters 2017",
+            "boardsesh_layout_id": 4,
+            "rows": 18,
+            "columns": 11,
+        },
+        "standard_masters_2019": {
+            "label": "MoonBoard Masters 2019",
+            "boardsesh_layout_id": 5,
+            "rows": 18,
+            "columns": 11,
+        },
+    },
+}
 
 
 def load_app_setting(key, default=None):
@@ -788,6 +850,13 @@ class VirtualMappingRequest(GridTranslation):
     wallid: int
 
 
+class SavedMoonBoardMappingRequest(VirtualMappingRequest):
+    mapping_id: Optional[str] = None
+    name: str
+    board_type: str
+    setup: str
+
+
 class VirtualMappingPreviewRequest(BaseModel):
     physical_led_ids: List[int] = Field(default_factory=list)
     enabled: bool = True
@@ -1239,47 +1308,41 @@ async def list_walls(gym: str = ""):
     return HTMLResponse(content=html_content)
 
 
-@app.get("/virtualmapping", response_class=HTMLResponse)
-async def virtual_mapping(id: str = ""):
-    id = id.strip()
-    if not id:
-        raise HTTPException(status_code=400, detail="Please send a wall id")
-    try:
-        wall_id = int(id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid wall id") from exc
-
-    db = SessionLocal()
-    try:
-        wall = db.query(WallDB).filter(WallDB.id == wall_id).first()
-        saved_creation = db.query(WallCreationDB).filter(
-            WallCreationDB.wallid == wall_id
-        ).first()
-        if wall is None:
-            raise HTTPException(status_code=404, detail="Wall not found")
-        if saved_creation is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Create and save the wall mapping first",
-            )
-        wall_data = {
-            "id": wall.id,
-            "name": wall.name,
-            "image_url": wall.image_url,
-            "image_width": wall.image_width,
-            "image_height": wall.image_height,
-        }
-    finally:
-        db.close()
-
-    return HTMLResponse(content=return_virtual_mapping_html(
-        wall_data,
-        APP_PATH_PREFIX,
-    ))
+def _moonboard_setup(board_type, setup):
+    board_setups = MOONBOARD_SETUPS.get(board_type)
+    setup_config = board_setups.get(setup) if board_setups else None
+    if setup_config is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown MoonBoard type or setup",
+        )
+    return setup_config
 
 
-@app.post("/virtualmapping/calculate")
-async def calculate_virtual_mapping(payload: VirtualMappingRequest):
+def _serialize_moonboard_mapping(saved_mapping):
+    return {
+        "id": saved_mapping.id,
+        "wallid": saved_mapping.wallid,
+        "name": saved_mapping.name,
+        "board_type": saved_mapping.board_type,
+        "setup": saved_mapping.setup,
+        "created_at": saved_mapping.created_at,
+        "updated_at": saved_mapping.updated_at,
+        "mapping": saved_mapping.settings,
+    }
+
+
+def _saved_moonboard_mappings(db, wall_id):
+    rows = db.query(MoonBoardMappingDB).filter(
+        MoonBoardMappingDB.wallid == wall_id
+    ).order_by(
+        MoonBoardMappingDB.name,
+        MoonBoardMappingDB.created_at,
+    ).all()
+    return [_serialize_moonboard_mapping(row) for row in rows]
+
+
+def _calculate_virtual_mapping_payload(payload):
     db = SessionLocal()
     try:
         wall = db.query(WallDB).filter(WallDB.id == payload.wallid).first()
@@ -1312,6 +1375,14 @@ async def calculate_virtual_mapping(payload: VirtualMappingRequest):
             led_start_corner=payload.led_start_corner,
             led_direction=payload.led_direction,
         )
+        position_layout = generate_grid_position_layout(
+            payload.r,
+            payload.c,
+            alternating=payload.alternating,
+            alternating_start_column=payload.alternating_start_column,
+            led_start_corner=payload.led_start_corner,
+            led_direction=payload.led_direction,
+        )
         mapping = map_virtual_grid_to_physical_leds(
             virtual_grid,
             saved_settings,
@@ -1322,10 +1393,212 @@ async def calculate_virtual_mapping(payload: VirtualMappingRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    for match in mapping["matches"]:
+        row, column = position_layout[match["virtual_position_id"]]
+        match["virtual_row"] = row
+        match["virtual_column"] = column
+        if not payload.alternating and payload.c <= 26:
+            moonboard_row = payload.r - row
+            match["moonboard_hold_id"] = (
+                (moonboard_row - 1) * payload.c + column + 1
+            )
+            match["moonboard_hold_label"] = (
+                f"{chr(ord('A') + column)}{moonboard_row}"
+            )
+
+    return mapping, wall_width, wall_height
+
+
+@app.get("/virtualmapping", response_class=HTMLResponse)
+async def virtual_mapping(id: str = ""):
+    id = id.strip()
+    if not id:
+        raise HTTPException(status_code=400, detail="Please send a wall id")
+    try:
+        wall_id = int(id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid wall id") from exc
+
+    db = SessionLocal()
+    try:
+        wall = db.query(WallDB).filter(WallDB.id == wall_id).first()
+        saved_creation = db.query(WallCreationDB).filter(
+            WallCreationDB.wallid == wall_id
+        ).first()
+        if wall is None:
+            raise HTTPException(status_code=404, detail="Wall not found")
+        if saved_creation is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Create and save the wall mapping first",
+            )
+        wall_data = {
+            "id": wall.id,
+            "name": wall.name,
+            "image_url": wall.image_url,
+            "image_width": wall.image_width,
+            "image_height": wall.image_height,
+        }
+        saved_mappings = _saved_moonboard_mappings(db, wall_id)
+    finally:
+        db.close()
+
+    return HTMLResponse(content=return_virtual_mapping_html(
+        wall_data,
+        APP_PATH_PREFIX,
+        saved_mappings,
+        MOONBOARD_SETUPS,
+    ))
+
+
+@app.post("/virtualmapping/calculate")
+async def calculate_virtual_mapping(payload: VirtualMappingRequest):
+    mapping, _, _ = _calculate_virtual_mapping_payload(payload)
     return {
         "matches": mapping["matches"],
         "physical_led_ids": mapping["physical_led_ids"],
     }
+
+
+@app.get("/virtualmapping/mappings")
+async def list_saved_moonboard_mappings(wallid: int):
+    db = SessionLocal()
+    try:
+        wall = db.query(WallDB).filter(WallDB.id == wallid).first()
+        if wall is None:
+            raise HTTPException(status_code=404, detail="Wall not found")
+        return {"mappings": _saved_moonboard_mappings(db, wallid)}
+    finally:
+        db.close()
+
+
+@app.post("/virtualmapping/mappings")
+async def save_moonboard_mapping(payload: SavedMoonBoardMappingRequest):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Mapping name is required")
+    if len(name) > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Mapping name must not exceed 100 characters",
+        )
+
+    setup_config = _moonboard_setup(payload.board_type, payload.setup)
+    if (
+        payload.r != setup_config["rows"]
+        or payload.c != setup_config["columns"]
+        or payload.alternating
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{setup_config['label']} requires a non-alternating "
+                f"{setup_config['rows']} x {setup_config['columns']} grid"
+            ),
+        )
+
+    mapping, wall_width, wall_height = _calculate_virtual_mapping_payload(
+        payload
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    mapping_id = payload.mapping_id.strip() if payload.mapping_id else None
+
+    db = SessionLocal()
+    try:
+        duplicate_query = db.query(MoonBoardMappingDB).filter(
+            MoonBoardMappingDB.wallid == payload.wallid,
+            MoonBoardMappingDB.name == name,
+        )
+        if mapping_id:
+            duplicate_query = duplicate_query.filter(
+                MoonBoardMappingDB.id != mapping_id
+            )
+        if duplicate_query.first() is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="A saved mapping with this name already exists for the wall",
+            )
+
+        saved_mapping = None
+        if mapping_id:
+            saved_mapping = db.query(MoonBoardMappingDB).filter(
+                MoonBoardMappingDB.id == mapping_id,
+                MoonBoardMappingDB.wallid == payload.wallid,
+            ).first()
+            if saved_mapping is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Saved MoonBoard mapping not found",
+                )
+
+        settings = {
+            "schema_version": 1,
+            "coordinate_space": "wall_image",
+            "coordinate_width": wall_width,
+            "coordinate_height": wall_height,
+            "boardsesh_layout_id": setup_config["boardsesh_layout_id"],
+            "points": [
+                {"x": payload.p1x, "y": payload.p1y},
+                {"x": payload.p2x, "y": payload.p2y},
+                {"x": payload.p3x, "y": payload.p3y},
+                {"x": payload.p4x, "y": payload.p4y},
+            ],
+            "r": payload.r,
+            "c": payload.c,
+            "alternating": payload.alternating,
+            "alternating_start_column": payload.alternating_start_column,
+            "led_start_corner": payload.led_start_corner,
+            "led_direction": payload.led_direction,
+            "matches": mapping["matches"],
+            "physical_led_ids": mapping["physical_led_ids"],
+        }
+        if saved_mapping is None:
+            saved_mapping = MoonBoardMappingDB(
+                id=str(uuid4()),
+                wallid=payload.wallid,
+                name=name,
+                board_type=payload.board_type,
+                setup=payload.setup,
+                settings=settings,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(saved_mapping)
+        else:
+            saved_mapping.name = name
+            saved_mapping.board_type = payload.board_type
+            saved_mapping.setup = payload.setup
+            saved_mapping.settings = settings
+            saved_mapping.updated_at = now
+
+        db.commit()
+        db.refresh(saved_mapping)
+        return {
+            "message": "MoonBoard mapping saved",
+            "mapping": _serialize_moonboard_mapping(saved_mapping),
+        }
+    finally:
+        db.close()
+
+
+@app.delete("/virtualmapping/mappings/{mapping_id}")
+async def delete_moonboard_mapping(mapping_id: str, wallid: int):
+    db = SessionLocal()
+    try:
+        saved_mapping = db.query(MoonBoardMappingDB).filter(
+            MoonBoardMappingDB.id == mapping_id,
+            MoonBoardMappingDB.wallid == wallid,
+        ).first()
+        if saved_mapping is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Saved MoonBoard mapping not found",
+            )
+        db.delete(saved_mapping)
+        db.commit()
+        return {"message": "MoonBoard mapping deleted"}
+    finally:
+        db.close()
 
 
 @app.post("/virtualmapping/preview")
