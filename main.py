@@ -754,6 +754,16 @@ class Send(BaseModel):
     repeat: bool
     send_date: str
     user: User
+
+
+class ManualGridPosition(BaseModel):
+    # Negative IDs keep manual positions independent of generated grid IDs.
+    id: int = Field(lt=0, strict=True)
+    x: int = Field(ge=0, strict=True)
+    y: int = Field(ge=0, strict=True)
+    before_position_id: Optional[int] = Field(default=None, ge=0, strict=True)
+
+
 class GridTranslation(BaseModel):
     id: Optional[str] = None
     p1x: int
@@ -773,6 +783,7 @@ class GridTranslation(BaseModel):
     excluded_position_ids: List[int] = Field(default_factory=list)
     auto_exclude_empty: bool = True
     apply_auto_exclusions: bool = False
+    manual_positions: List[ManualGridPosition] = Field(default_factory=list)
 
 
 class WallTranslation(GridTranslation):
@@ -1492,6 +1503,37 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
                 led_start_corner=grid_payload.led_start_corner,
                 led_direction=grid_payload.led_direction,
             )
+            base_position_ids = sorted(full_grid)
+            manual_ids = set()
+            manual_coordinates = set()
+            for point in grid_payload.manual_positions:
+                if point.id in manual_ids:
+                    raise ValueError("Duplicate manual position ID")
+                if point.before_position_id is not None and point.before_position_id not in full_grid:
+                    raise ValueError("Manual hole insertion position no longer exists; choose a new cable position")
+                if (
+                    (existing_wall.image_width and point.x > existing_wall.image_width)
+                    or (existing_wall.image_height and point.y > existing_wall.image_height)
+                ):
+                    raise ValueError("Manual hole must be inside the wall image")
+                if (point.x, point.y) in manual_coordinates:
+                    raise ValueError("Duplicate manual hole coordinates")
+                manual_ids.add(point.id)
+                manual_coordinates.add((point.x, point.y))
+            # Anchors refer to structural grid positions, even when excluded.
+            # Existing IDs and above/below relationships never shift.
+            position_order = []
+            for anchor in [*base_position_ids, None]:
+                position_order.extend(
+                    point.id for point in grid_payload.manual_positions
+                    if point.before_position_id == anchor
+                )
+                if anchor is not None:
+                    position_order.append(anchor)
+            full_grid.update({
+                point.id: (point.x, point.y)
+                for point in grid_payload.manual_positions
+            })
         except ValueError as exc:
             db.close()
             raise HTTPException(
@@ -1511,17 +1553,17 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
                 ),
             )
 
-        prepared_grids.append((grid_payload, full_grid, excluded_position_ids))
+        prepared_grids.append((grid_payload, full_grid, excluded_position_ids, position_order))
         for position_id, coordinates in full_grid.items():
             combined_positions[(grid_index, position_id)] = coordinates
 
     occupied_positions = positions_near_holds(
         existing_wall.holds,
-        [full_grid for _, full_grid, _ in prepared_grids],
+        [full_grid for _, full_grid, _, _ in prepared_grids],
     )
     led_offset = 0
 
-    for grid_index, (grid_payload, full_grid, excluded_position_ids) in enumerate(
+    for grid_index, (grid_payload, full_grid, excluded_position_ids, position_order) in enumerate(
         prepared_grids
     ):
         if (
@@ -1531,12 +1573,12 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
             excluded_position_ids.update(
                 position_id
                 for position_id in full_grid
-                if (grid_index, position_id) not in occupied_positions
+                if position_id >= 0 and (grid_index, position_id) not in occupied_positions
             )
 
         active_position_ids = [
             position_id
-            for position_id in sorted(full_grid)
+            for position_id in position_order
             if position_id not in excluded_position_ids
         ]
         if not active_position_ids and not grid_payload.apply_auto_exclusions:
@@ -1577,6 +1619,8 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
             "auto_exclude_empty": grid_payload.auto_exclude_empty,
             "excluded_position_ids": sorted(excluded_position_ids),
             "positions": full_grid,
+            "manual_positions": [point.model_dump() for point in grid_payload.manual_positions],
+            "position_order": position_order,
             "position_led_ids": position_led_ids,
             "led_start": led_offset,
             "led_end": led_offset + len(active_position_ids) - 1,

@@ -42,6 +42,15 @@ TRANSLATIONS = {
         "button.send": "Save all grids",
         "button.save": "Save all grids",
         "button.reset": "Reset grid",
+        "manual.add": "Add individual holes",
+        "manual.help": "Save the grid first, enable this mode, then click each extra hole in the image. Choose where it belongs in this grid's cable order. These are logical LED IDs, translated separately through hole2LEDS. Save all grids to keep the changes.",
+        "manual.order": "Insert in cable order:",
+        "manual.end": "At the end of this grid",
+        "manual.before": "Before LED {led} (grid position {position})",
+        "manual.disabled": "Before disabled grid position {position}",
+        "manual.hole": "Extra hole {number} · LED {led}",
+        "manual.remove": "Remove extra hole",
+        "manual.pending": "Save the changed grid first before adding more holes.",
         "status.points": "Points: {count} / 4",
         "status.grid": "Grid: {active} active, {excluded} disabled{suffix}",
         "status.unsaved": " – not saved yet",
@@ -91,6 +100,15 @@ TRANSLATIONS = {
         "button.send": "Alle Raster speichern",
         "button.save": "Alle Raster speichern",
         "button.reset": "Raster zurücksetzen",
+        "manual.add": "Einzelne Löcher hinzufügen",
+        "manual.help": "Raster zuerst speichern, diesen Modus aktivieren und dann jedes zusätzliche Loch im Bild anklicken. Wähle seine Stelle im Kabelverlauf dieses Rasters. Angezeigt werden logische LED-IDs; hole2LEDS übersetzt diese separat. Änderungen mit Alle Raster speichern übernehmen.",
+        "manual.order": "Im Kabelverlauf einfügen:",
+        "manual.end": "Am Ende dieses Rasters",
+        "manual.before": "Vor LED {led} (Rasterposition {position})",
+        "manual.disabled": "Vor abgewählter Rasterposition {position}",
+        "manual.hole": "Zusatzloch {number} · LED {led}",
+        "manual.remove": "Zusatzloch entfernen",
+        "manual.pending": "Das geänderte Raster zuerst speichern, bevor weitere Löcher hinzugefügt werden.",
         "status.points": "Punkte: {count} / 4",
         "status.grid": "Raster: {active} aktiv, {excluded} abgewählt{suffix}",
         "status.unsaved": " – noch nicht gespeichert",
@@ -151,6 +169,12 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         .grid-point { position: absolute; width: 8px; height: 8px; background: rgba(0, 255, 0, 0.7); border: 1px solid white; border-radius: 50%; transform: translate(-50%, -50%); cursor: pointer; color: white; font-size: 8px; text-align: center; line-height: 8px; }
         .hold-point { background: rgba(255, 165, 0, 0.9); width: auto; height: 16px; min-width: 16px; padding: 0 4px; border-radius: 8px; line-height: 16px; }
         .grid-point.excluded-point { width: 12px; height: 12px; padding: 0; background: rgba(90, 90, 90, 0.35); border: 2px solid rgba(255, 255, 255, 0.9); line-height: 12px; opacity: 0.8; }
+        .grid-point.manual-point { outline: 2px solid #713ab6; outline-offset: 2px; }
+        #manual-controls { width: min(100%, 900px); padding: 12px; box-sizing: border-box; border: 1px solid #aaa; border-radius: 7px; background: white; margin-bottom: 14px; }
+        #manual-controls p { margin: 8px 0; font-size: 0.9em; }
+        #manual-list { max-height: 230px; overflow-y: auto; }
+        .manual-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+        #manual-list button { cursor: pointer; }
     </style>
 </head>
 <body>
@@ -194,6 +218,13 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <p data-i18n="help.numbering">The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.</p>
     <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
     <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save all grids</b>.</p>
+    <section id="manual-controls">
+        <label><input id="add-hole-mode" type="checkbox" disabled> <span data-i18n="manual.add">Add individual holes</span></label>
+        <p data-i18n="manual.help">Save the grid first, then click extra holes in the image and choose their cable order.</p>
+        <label for="manual-insert-before" data-i18n="manual.order">Insert in cable order:</label>
+        <select id="manual-insert-before" disabled></select>
+        <div id="manual-list"></div>
+    </section>
     <div id="image-container"><img id="climbing-image" src="__IMAGE_URL__" alt="Climbing wall" data-i18n-alt="image.alt"></div>
     <div id="status">Points: 0 / 4</div>
     <div id="action-buttons">
@@ -215,6 +246,9 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         const ledStartCornerSelect = document.getElementById('led-start-corner');
         const ledDirectionSelect = document.getElementById('led-direction');
         const autoExcludeEmptyCheckbox = document.getElementById('auto-exclude-empty');
+        const addHoleMode = document.getElementById('add-hole-mode');
+        const manualInsertBefore = document.getElementById('manual-insert-before');
+        const manualList = document.getElementById('manual-list');
         const savedCreation = __SAVED_CREATION__;
         const wallImageWidth = __WALL_IMAGE_WIDTH__;
         const wallImageHeight = __WALL_IMAGE_HEIGHT__;
@@ -231,7 +265,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
         function createEmptyGrid() {
-            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: true, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
+            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, manual_positions: [], position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: true, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
         }
         function normalizeGrid(grid, index) {
             return { ...createEmptyGrid(), ...grid, id: grid.id || `grid-${index + 1}`, points: grid.points || [], positions: grid.positions || null, position_led_ids: grid.position_led_ids || {}, position_hold_ids: grid.position_hold_ids || {}, excluded_position_ids: grid.excluded_position_ids || [] };
@@ -259,6 +293,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             const scaleY = targetHeight / sourceHeight;
             grids.forEach((grid) => {
                 grid.points = grid.points.map((point) => ({ x: Math.round(point.x * scaleX), y: Math.round(point.y * scaleY) }));
+                grid.manual_positions = grid.manual_positions.map((point) => ({ ...point, x: Math.round(point.x * scaleX), y: Math.round(point.y * scaleY) }));
                 if (grid.positions) grid.positions = Object.fromEntries(Object.entries(grid.positions).map(([id, point]) => [id, [Math.round(point[0] * scaleX), Math.round(point[1] * scaleY)]]));
             });
             savedCreation.coordinate_space = 'wall_image';
@@ -306,7 +341,14 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             grids.forEach((grid) => {
                 if (!grid.positions) { grid.position_led_ids = {}; delete grid.led_start; delete grid.led_end; return; }
                 const excluded = new Set((grid.excluded_position_ids || []).map(Number));
-                const activeIds = Object.keys(grid.positions).map(Number).filter((id) => !excluded.has(id)).sort((a, b) => a - b);
+                const baseIds = Object.keys(grid.positions).map(Number).filter((id) => id >= 0).sort((a, b) => a - b);
+                const orderedIds = [];
+                for (const anchor of [...baseIds, null]) {
+                    orderedIds.push(...grid.manual_positions.filter((point) => point.before_position_id === anchor).map((point) => point.id));
+                    if (anchor !== null) orderedIds.push(anchor);
+                }
+                grid.position_order = orderedIds;
+                const activeIds = orderedIds.filter((id) => !excluded.has(id));
                 grid.position_led_ids = Object.fromEntries(activeIds.map((id, localId) => [id, offset + localId]));
                 grid.led_start = offset;
                 grid.led_end = offset + activeIds.length - 1;
@@ -375,6 +417,8 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         }
         function loadGrid(index) {
             captureActiveGrid();
+            addHoleMode.checked = false;
+            manualInsertBefore.value = '';
             activeGridIndex = index;
             const grid = grids[index];
             points = (grid.points || []).map((point) => ({ ...point }));
@@ -392,7 +436,49 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             lastGridSettings = grid.last_grid_settings;
             if (!lastGridSettings && points.length === 4 && renderedPositions) lastGridSettings = gridSettingsFor(grid);
             activeGridLoaded = true;
-            renderTabs(); updateSubmitButtonLabel(); updateUI(); renderGrid(); updateGridStatus();
+            renderTabs(); updateSubmitButtonLabel(); updateUI(); renderGrid(); updateGridStatus(); renderManualControls();
+        }
+        function fillInsertionOptions(select, selected) {
+            select.replaceChildren();
+            select.add(new Option(t('manual.end'), ''));
+            for (const id of Object.keys(renderedPositions || {}).map(Number).filter((id) => id >= 0).sort((a, b) => a - b)) {
+                const led = positionLedIds[id];
+                const label = led === undefined ? t('manual.disabled', { position: id }) : t('manual.before', { led, position: id });
+                select.add(new Option(label, String(id)));
+            }
+            select.value = selected === null ? '' : String(selected);
+            if (select.selectedIndex < 0) select.value = '';
+        }
+        function manualPositionsChanged() {
+            selectionDirty = true;
+            captureActiveGrid(); renumberGrids();
+            positionLedIds = grids[activeGridIndex].position_led_ids;
+            renderTabs(); renderGrid(); updateGridStatus(); renderManualControls();
+        }
+        function renderManualControls() {
+            const grid = grids[activeGridIndex];
+            const ready = Boolean(renderedPositions && lastGridSettings && gridSettingsFor(grid) === lastGridSettings);
+            addHoleMode.disabled = !ready;
+            manualInsertBefore.disabled = !ready;
+            if (!ready) addHoleMode.checked = false;
+            fillInsertionOptions(manualInsertBefore, manualInsertBefore.value === '' ? null : Number(manualInsertBefore.value));
+            manualList.replaceChildren();
+            grid.manual_positions.forEach((point, index) => {
+                const row = document.createElement('div'); row.className = 'manual-row';
+                const label = document.createElement('span');
+                label.textContent = t('manual.hole', { number: index + 1, led: positionLedIds[point.id] ?? '—' });
+                const select = document.createElement('select');
+                select.setAttribute('aria-label', `${label.textContent}: ${t('manual.order')}`);
+                fillInsertionOptions(select, point.before_position_id);
+                select.addEventListener('change', () => { point.before_position_id = select.value === '' ? null : Number(select.value); manualPositionsChanged(); });
+                const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = t('manual.remove');
+                remove.addEventListener('click', () => {
+                    grid.manual_positions = grid.manual_positions.filter((item) => item.id !== point.id);
+                    delete renderedPositions[point.id]; delete grid.position_hold_ids[point.id];
+                    excludedPositionIds.delete(point.id); manualPositionsChanged();
+                });
+                row.append(label, select, remove); manualList.appendChild(row);
+            });
         }
         function updateSubmitButtonLabel() { submitBtn.textContent = t('button.save'); }
         function renderGrid() {
@@ -407,6 +493,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 const element = document.createElement('div');
                 const excluded = excludedPositionIds.has(positionId);
                 const classes = ['grid-point'];
+                if (positionId < 0) classes.push('manual-point');
                 element.style.left = `${displayPoint.x}px`; element.style.top = `${displayPoint.y}px`; element.dataset.positionId = positionIdText;
                 if (excluded) { classes.push('excluded-point'); element.title = t('grid.excluded_title'); }
                 else if (positionHoldIds[positionIdText]) { const holdId = positionHoldIds[positionIdText]; classes.push('hold-point'); element.title = t('grid.hold_title', { holdId, ledId }); element.textContent = holdId.substring(0, 4); }
@@ -414,9 +501,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 element.className = classes.join(' ');
                 element.addEventListener('click', (event) => {
                     event.stopPropagation();
+                    if (addHoleMode.checked) return;
                     if (excludedPositionIds.has(positionId)) excludedPositionIds.delete(positionId); else excludedPositionIds.add(positionId);
                     selectionDirty = true; captureActiveGrid(); renumberGrids(); positionLedIds = grids[activeGridIndex].position_led_ids;
-                    renderTabs(); renderGrid(); updateGridStatus();
+                    renderTabs(); renderGrid(); updateGridStatus(); renderManualControls();
                 });
                 imageContainer.appendChild(element);
             }
@@ -437,15 +525,31 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         alternatingCheckbox.addEventListener('change', () => { alternatingStart.disabled = !alternatingCheckbox.checked; });
         resetBtn.addEventListener('click', () => {
             points = []; renderedPositions = null; positionLedIds = {}; excludedPositionIds.clear(); selectionDirty = true; lastGridSettings = null;
-            captureActiveGrid(); renumberGrids(); renderTabs(); updateUI(); renderGrid();
+            grids[activeGridIndex].manual_positions = [];
+            captureActiveGrid(); renumberGrids(); renderTabs(); updateUI(); renderGrid(); renderManualControls();
         });
         imageContainer.addEventListener('click', (event) => {
+            if (addHoleMode.checked) {
+                captureActiveGrid();
+                const grid = grids[activeGridIndex];
+                if (!renderedPositions || gridSettingsFor(grid) !== lastGridSettings) { alert(t('manual.pending')); return; }
+                const rect = climbingImage.getBoundingClientRect();
+                const point = displayToImage(event.clientX - rect.left, event.clientY - rect.top);
+                if (point.x < 0 || point.y < 0 || point.x > coordinateWidth() || point.y > coordinateHeight()) return;
+                if (Object.values(renderedPositions).some(([x, y]) => x === point.x && y === point.y)) return;
+                const id = Math.min(0, ...grid.manual_positions.map((item) => item.id)) - 1;
+                grid.manual_positions.push({ id, ...point, before_position_id: manualInsertBefore.value === '' ? null : Number(manualInsertBefore.value) });
+                renderedPositions[id] = [point.x, point.y]; manualPositionsChanged(); return;
+            }
             if (points.length >= 4) return;
             const rect = climbingImage.getBoundingClientRect();
             points.push(displayToImage(event.clientX - rect.left, event.clientY - rect.top)); selectionDirty = true; updateUI();
         });
-        imageContainer.addEventListener('contextmenu', (event) => { event.preventDefault(); if (points.length > 0) { points.pop(); selectionDirty = true; updateUI(); } });
-        function redraw() { updateUI(); renderGrid(); updateGridStatus(); }
+        imageContainer.addEventListener('contextmenu', (event) => { event.preventDefault(); if (addHoleMode.checked) { addHoleMode.checked = false; return; } if (points.length > 0) { points.pop(); selectionDirty = true; captureActiveGrid(); updateUI(); renderManualControls(); } });
+        for (const input of [rows, columns, alternatingCheckbox, alternatingStart, ledStartCornerSelect, ledDirectionSelect]) {
+            input.addEventListener('change', () => { captureActiveGrid(); renderManualControls(); });
+        }
+        function redraw() { updateUI(); renderGrid(); updateGridStatus(); renderManualControls(); }
         window.addEventListener('resize', redraw);
         if ('ResizeObserver' in window) new ResizeObserver(() => { if (savedCreationInitialized) redraw(); }).observe(climbingImage);
         window.addEventListener('crux-language-change', () => { renderTabs(); updateSubmitButtonLabel(); redraw(); });
@@ -459,7 +563,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 const settings = gridSettingsFor(grid);
                 const allPositionsExcluded = Boolean(grid.positions && grid.excluded_position_ids.length === Object.keys(grid.positions).length);
                 grid.apply_auto_exclusions = Boolean(grid.auto_exclude_empty && (!grid.positions || !grid.last_grid_settings || settings !== grid.last_grid_settings || allPositionsExcluded));
-                if (grid.last_grid_settings && settings !== grid.last_grid_settings) grid.excluded_position_ids = [];
+                if (grid.last_grid_settings && settings !== grid.last_grid_settings) grid.excluded_position_ids = grid.excluded_position_ids.filter((id) => id < 0);
                 if (allPositionsExcluded && !grid.apply_auto_exclusions) { alert(t('alert.active_position')); return; }
             }
             const activeId = grids[activeGridIndex].id;
@@ -473,8 +577,11 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     led_start_corner: grid.led_start_corner, led_direction: grid.led_direction, excluded_position_ids: grid.excluded_position_ids,
                     auto_exclude_empty: Boolean(grid.auto_exclude_empty),
                     apply_auto_exclusions: Boolean(grid.apply_auto_exclusions),
+                    manual_positions: grid.manual_positions,
                 })),
             };
+            submitBtn.disabled = true;
+            document.body.inert = true;
             try {
                 const response = await fetch('__PATH_PREFIX__/defineholds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 const result = await response.json();
@@ -488,6 +595,9 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             } catch (error) {
                 console.error('Could not save wall mapping:', error);
                 alert(t('alert.send_error', { message: error.message }));
+            } finally {
+                submitBtn.disabled = false;
+                document.body.inert = false;
             }
         });
         function initializeSavedCreation() {
