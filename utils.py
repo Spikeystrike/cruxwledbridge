@@ -477,6 +477,42 @@ def positions_near_holds(holds, grids, proximity_ratio=0.45):
     return occupied_positions
 
 
+def _wall_grid_inverse_transform(saved_grid, scale_x, scale_y):
+    """Recover the wall plane so 'below' follows its rows in a tilted photo."""
+    try:
+        corners = [
+            (float(point["x"]) * scale_x, float(point["y"]) * scale_y)
+            for point in saved_grid["points"]
+        ]
+        if len(corners) != 4:
+            return None
+        return np.linalg.inv(_grid_homography(*corners))
+    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+        # Older mappings may only contain image positions, without corners.
+        return None
+
+
+def _positions_at_or_below(positions, x, y, inverse_transform):
+    # A row in the flat wall plane becomes a line in the photograph. Testing
+    # that line avoids choosing a sideways point on a sloping upper row.
+    row_line = np.asarray((0.0, 1.0, -y))
+    if inverse_transform is not None:
+        projected = inverse_transform @ np.asarray((x, y, 1.0))
+        if not np.isclose(projected[2], 0.0):
+            row = projected[1] / projected[2]
+            row_line = inverse_transform[1] - row * inverse_transform[2]
+            if projected[2] < 0:
+                row_line = -row_line
+    a, b, c = row_line
+    # Generated grid coordinates are rounded to pixels. Treat the same row
+    # as level even if that rounding moves a point by half a pixel per axis.
+    tolerance = 0.5 * (abs(a) + abs(b)) + 1e-9
+    return [
+        position for position in positions
+        if a * position[1] + b * position[2] + c >= -tolerance
+    ]
+
+
 def map_virtual_grid_to_physical_leds(
     virtual_grid,
     saved_settings,
@@ -484,7 +520,7 @@ def map_virtual_grid_to_physical_leds(
     target_width=None,
     target_height=None,
 ):
-    """Match virtual cable-order positions to physical LEDs across all grids."""
+    """Match virtual holds to the nearest LED at or below them in their grid."""
     if not isinstance(saved_settings, dict):
         raise ValueError("A saved wall mapping is required")
 
@@ -509,13 +545,19 @@ def map_virtual_grid_to_physical_leds(
         raise ValueError("Wall mapping coordinate dimensions are invalid") from exc
 
     active_positions = []
-    for saved_grid in saved_grids:
+    grid_positions = {}
+    grid_transforms = {}
+    for grid_index, saved_grid in enumerate(saved_grids):
         if not isinstance(saved_grid, dict):
             continue
         positions = saved_grid.get("positions", {})
         position_led_ids = saved_grid.get("position_led_ids", {})
         if not isinstance(positions, dict) or not isinstance(position_led_ids, dict):
             continue
+        grid_positions[grid_index] = []
+        grid_transforms[grid_index] = _wall_grid_inverse_transform(
+            saved_grid, scale_x, scale_y,
+        )
 
         for raw_position_id, raw_logical_led_id in position_led_ids.items():
             coordinates = positions.get(raw_position_id)
@@ -535,7 +577,9 @@ def map_virtual_grid_to_physical_leds(
                 continue
             if not np.isfinite((x, y)).all():
                 continue
-            active_positions.append((logical_led_id, x, y))
+            position = (logical_led_id, x, y, grid_index)
+            active_positions.append(position)
+            grid_positions[grid_index].append(position)
 
     if not active_positions:
         raise ValueError("The saved wall mapping has no active LED positions")
@@ -566,14 +610,24 @@ def map_virtual_grid_to_physical_leds(
         except (TypeError, ValueError) as exc:
             raise ValueError("The virtual grid contains invalid coordinates") from exc
 
-        logical_led_id, source_x, source_y = min(
-            active_positions,
-            key=lambda position: (
+        def distance_key(position):
+            return (
                 (position[1] - virtual_x) ** 2
                 + (position[2] - virtual_y) ** 2,
                 position[0],
-            ),
+            )
+
+        # First identify the local wall section. Searching below globally
+        # could jump to a different plane or an unrelated lower wall grid.
+        nearest = min(active_positions, key=distance_key)
+        grid_index = nearest[3]
+        below_positions = _positions_at_or_below(
+            grid_positions[grid_index], virtual_x, virtual_y,
+            grid_transforms[grid_index],
         )
+        logical_led_id, source_x, source_y, _ = min(
+            below_positions, key=distance_key,
+        ) if below_positions else nearest
         physical_led_ids = hole2leds.get(logical_led_id)
         if physical_led_ids is None:
             physical_led_ids = hole2leds.get(str(logical_led_id))

@@ -36,6 +36,7 @@ TRANSLATIONS = {
         "help.corners": "Click four MoonBoard corner points in this order:",
         "help.corner_order": "Top left, top right, bottom right, bottom left",
         "help.mapping": "Calculate remains temporary and produces the same copyable list as before. Save mapping stores the selected board, setup, corners, CRUX hold IDs and physical LEDs in the bridge database.",
+        "help.below": "Each virtual hold uses the nearest active LED level with or below it in its wall grid. If none is available there, the nearest LED in that grid is kept. Recalculate and update saved mappings to apply this rule.",
         "help.preview": "The preview lights the mapped physical cable LEDs orange. Stop it to restore the previous route or off state.",
         "page.add_holes": "Edit wall grid / add individual holes",
         "button.calculate": "Calculate physical LED list",
@@ -50,7 +51,7 @@ TRANSLATIONS = {
         "result.heading": "Physical cable LED numbers",
         "result.description": "Comma-separated in the selected virtual cable order:",
         "status.points": "Corner points: {count} / 4",
-        "status.calculating": "Calculating nearest physical LEDs...",
+        "status.calculating": "Calculating physical LEDs below the holds...",
         "status.mapped": "Mapped {virtual} virtual positions to {physical} physical LEDs. Repeated physical IDs: {duplicates}.",
         "status.copied": "LED list copied.",
         "status.loaded": "Loaded saved mapping “{name}”.",
@@ -104,6 +105,7 @@ TRANSLATIONS = {
         "help.corners": "Klicke vier MoonBoard-Eckpunkte in dieser Reihenfolge an:",
         "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
         "help.mapping": "„Berechnen“ bleibt temporär und erzeugt dieselbe kopierbare Liste wie bisher. „Zuordnung speichern“ legt Board, Setup, Eckpunkte, CRUX-Griff-IDs und physische LEDs dauerhaft in der Bridge-Datenbank ab.",
+        "help.below": "Jeder virtuelle Griff erhält die nächste aktive LED auf gleicher Höhe oder darunter in seinem Wandraster. Ist dort keine verfügbar, bleibt die nächstgelegene LED dieses Rasters zugeordnet. Gespeicherte Zuordnungen neu berechnen und aktualisieren, um diese Regel anzuwenden.",
         "help.preview": "Die Vorschau lässt die zugeordneten physischen Kabel-LEDs orange leuchten. Beim Beenden wird die vorherige Route beziehungsweise der ausgeschaltete Zustand wiederhergestellt.",
         "page.add_holes": "Wandraster bearbeiten / einzelne Löcher hinzufügen",
         "button.calculate": "Physische LED-Liste berechnen",
@@ -118,7 +120,7 @@ TRANSLATIONS = {
         "result.heading": "Physische Kabel-LED-Nummern",
         "result.description": "Kommagetrennt in der gewählten virtuellen Kabelreihenfolge:",
         "status.points": "Eckpunkte: {count} / 4",
-        "status.calculating": "Nächstgelegene physische LEDs werden berechnet ...",
+        "status.calculating": "Physische LEDs unterhalb der Griffe werden berechnet ...",
         "status.mapped": "{virtual} virtuelle Positionen wurden {physical} physischen LEDs zugeordnet. Wiederholte physische IDs: {duplicates}.",
         "status.copied": "LED-Liste wurde kopiert.",
         "status.loaded": "Gespeicherte Zuordnung „{name}“ wurde geladen.",
@@ -286,6 +288,7 @@ def return_virtual_mapping_html(
             <span data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</span>
         </p>
         <p class="help" data-i18n="help.mapping">Calculate remains temporary and produces the same copyable list as before. Save mapping stores the selected board, setup, corners, CRUX hold IDs and physical LEDs in the bridge database.</p>
+        <p class="help" data-i18n="help.below">Each virtual hold uses the nearest active LED level with or below it in its wall grid. If none is available there, the nearest LED in that grid is kept. Recalculate and update saved mappings to apply this rule.</p>
 
         <div id="image-container">
             <img id="climbing-image" src="__IMAGE_URL__" alt="Climbing wall" data-i18n-alt="image.alt">
