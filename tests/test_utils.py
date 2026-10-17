@@ -1252,6 +1252,117 @@ class DefineHoldsTests(unittest.TestCase):
         db.commit()
         db.close()
 
+    def manual_payload(self, **changes):
+        return main.WallTranslation(**{
+            "wallid": self.wall_id,
+            "p1x": 0, "p1y": 0, "p2x": 20, "p2y": 0,
+            "p3x": 20, "p3y": 10, "p4x": 0, "p4y": 10,
+            "r": 1, "c": 3,
+            "led_start_corner": "top_left", "led_direction": "horizontal",
+            "manual_positions": [
+                {"id": -1, "x": 5, "y": 5, "before_position_id": 1},
+                {"id": -2, "x": 15, "y": 5},
+            ],
+            **changes,
+        })
+
+    def test_manual_holes_insert_in_cable_order_and_persist(self):
+        payload = self.manual_payload()
+        result = asyncio.run(main.define_holds(payload))
+        self.assertEqual(result["position_led_ids"], {0: 0, -1: 1, 1: 2, 2: 3, -2: 4})
+        self.assertEqual(result["positions"][-1], (5, 5))
+        self.assertEqual(result["grids"][0]["position_order"], [0, -1, 1, 2, -2])
+        with main.SessionLocal() as db:
+            saved = db.query(main.WallCreationDB).filter_by(wallid=self.wall_id).one().settings
+        self.assertEqual(saved["manual_positions"], [p.model_dump() for p in payload.manual_positions])
+        self.assertEqual(saved["positions"]["-1"], [5, 5])
+        html = main.returnwallhtml({"id": self.wall_id, "image_url": "wall.jpg"}, saved_creation=saved)
+        self.assertIn('"manual_positions":[{"id":-1,"x":5,"y":5,"before_position_id":1}', html)
+        # Reconstruct the request from actual SQLite JSON, like a reopened page.
+        reopened = self.manual_payload(manual_positions=saved["manual_positions"], excluded_position_ids=saved["excluded_position_ids"])
+        again = asyncio.run(main.define_holds(reopened))
+        self.assertEqual(again["grid"], result["grid"])
+
+    def test_manual_holes_bypass_auto_exclusion_but_allow_manual_toggle(self):
+        auto = asyncio.run(main.define_holds(self.manual_payload(apply_auto_exclusions=True)))
+        self.assertIn(-1, auto["position_led_ids"])
+        self.assertIn(-2, auto["position_led_ids"])
+        self.assertIn(1, auto["excluded_position_ids"])
+        disabled = asyncio.run(main.define_holds(self.manual_payload(excluded_position_ids=[-1])))
+        self.assertNotIn(-1, disabled["position_led_ids"])
+        self.assertEqual(disabled["position_led_ids"][1], 1)
+        reactivated = asyncio.run(main.define_holds(self.manual_payload()))
+        self.assertEqual(reactivated["position_led_ids"][-1], 1)
+
+    def test_manual_hole_anchor_survives_disabled_grid_position(self):
+        result = asyncio.run(main.define_holds(self.manual_payload(excluded_position_ids=[1])))
+        self.assertEqual(result["position_led_ids"], {0: 0, -1: 1, 2: 2, -2: 3})
+
+    def test_manual_holes_at_same_anchor_keep_list_order(self):
+        payload = self.manual_payload()
+        payload.manual_positions[1].before_position_id = 1
+        result = asyncio.run(main.define_holds(payload))
+        self.assertEqual(result["grids"][0]["position_order"], [0, -1, -2, 1, 2])
+
+    def test_manual_hole_maps_crux_hold_and_virtual_physical_led(self):
+        with main.SessionLocal() as db:
+            wall = db.query(main.WallDB).filter_by(id=self.wall_id).one()
+            wall.holds = [{"id": "extra", "mask": [[5, 5], [5, 5]]}]
+            db.commit()
+        result = asyncio.run(main.define_holds(self.manual_payload()))
+        self.assertEqual(result["holds2led"], {"extra": 1})
+        virtual = utils.map_virtual_grid_to_physical_leds(
+            {0: (5, 5)}, {"grids": result["grids"]}, {1: [38, 39]},
+        )
+        self.assertEqual(virtual["physical_led_ids"], [38, 39])
+
+    def test_manual_holes_preserve_above_mapping_structural_rows(self):
+        result = asyncio.run(main.define_holds(self.manual_payload(r=2)))
+        settings = {"grids": result["grids"]}
+        # Top row IDs 0,1,2; bottom row IDs 3,4,5 despite manual insertions.
+        self.assertEqual(main._above_led_mapping(settings)[4], (3, False))
+        manual_led = result["position_led_ids"][-1]
+        self.assertEqual(main.apply_hold_lighting_direction({manual_led: "start"}, settings, "above"), {manual_led: "start"})
+
+    def test_manual_holes_shift_later_grid_ranges_and_support_tab_reorder(self):
+        first = self.manual_payload().model_dump(exclude={"wallid"})
+        second = self.manual_payload(manual_positions=[]).model_dump(exclude={"wallid"})
+        result = asyncio.run(main.define_holds(main.MultiGridWallTranslation(wallid=self.wall_id, grids=[first, second])))
+        self.assertEqual(result["grids"][1]["led_start"], 5)
+        result = asyncio.run(main.define_holds(main.MultiGridWallTranslation(wallid=self.wall_id, grids=[second, first])))
+        self.assertEqual(result["grids"][1]["position_led_ids"][-1], 4)
+
+    def test_removing_manual_holes_does_not_leave_stale_positions(self):
+        asyncio.run(main.define_holds(self.manual_payload()))
+        result = asyncio.run(main.define_holds(self.manual_payload(manual_positions=[])))
+        self.assertEqual(set(result["positions"]), {0, 1, 2})
+        self.assertEqual(result["position_led_ids"], {0: 0, 1: 1, 2: 2})
+
+    def test_invalid_manual_holes_do_not_overwrite_saved_mapping(self):
+        asyncio.run(main.define_holds(self.manual_payload()))
+        with main.SessionLocal() as db:
+            before = db.query(main.WallCreationDB).filter_by(wallid=self.wall_id).one().settings
+        invalid = [
+            [{"id": -1, "x": 5, "y": 5, "before_position_id": 99}],
+            [{"id": -1, "x": 21, "y": 5}],
+            [{"id": -1, "x": 5, "y": 11}],
+            [{"id": -1, "x": 5, "y": 5}, {"id": -1, "x": 6, "y": 5}],
+            [{"id": -1, "x": 5, "y": 5}, {"id": -2, "x": 5, "y": 5}],
+        ]
+        for positions in invalid:
+            with self.subTest(positions=positions):
+                with self.assertRaises(HTTPException) as raised:
+                    asyncio.run(main.define_holds(self.manual_payload(manual_positions=positions)))
+                self.assertEqual(raised.exception.status_code, 400)
+                with main.SessionLocal() as db:
+                    self.assertEqual(db.query(main.WallCreationDB).filter_by(wallid=self.wall_id).one().settings, before)
+
+    def test_manual_position_schema_rejects_invalid_ids_and_coordinates(self):
+        for changes in ({"id": 0}, {"id": True}, {"x": -1}, {"x": 1.5}, {"y": "nan"}, {"before_position_id": -2}):
+            with self.subTest(changes=changes):
+                with self.assertRaises(ValueError):
+                    main.ManualGridPosition(**{"id": -1, "x": 1, "y": 1, **changes})
+
     def test_excluded_position_is_not_used_for_mapping(self):
         payload = main.WallTranslation(
             wallid=self.wall_id,
