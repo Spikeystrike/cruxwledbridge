@@ -542,6 +542,20 @@ def map_virtual_grid_to_physical_leds(
     if not isinstance(virtual_grid, dict) or not virtual_grid:
         raise ValueError("The virtual grid has no positions")
 
+    hold_ids_by_logical_led = {}
+    saved_holds2led = saved_settings.get("holds2led", {})
+    if isinstance(saved_holds2led, dict):
+        for hold_id, raw_logical_led_id in saved_holds2led.items():
+            try:
+                logical_led_id = int(raw_logical_led_id)
+            except (TypeError, ValueError):
+                continue
+            hold_ids_by_logical_led.setdefault(logical_led_id, []).append(
+                str(hold_id)
+            )
+    for hold_ids in hold_ids_by_logical_led.values():
+        hold_ids.sort()
+
     matches = []
     flattened_physical_led_ids = []
     for virtual_position_id in sorted(virtual_grid):
@@ -583,6 +597,7 @@ def map_virtual_grid_to_physical_leds(
             "virtual_x": round(virtual_x),
             "virtual_y": round(virtual_y),
             "logical_led_id": logical_led_id,
+            "crux_hold_ids": hold_ids_by_logical_led.get(logical_led_id, []),
             "physical_led_ids": physical_led_ids,
             "source_x": round(source_x),
             "source_y": round(source_y),
