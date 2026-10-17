@@ -648,6 +648,34 @@ def _scale_hex_color(color, brightness_percent):
     )
 
 
+def _send_individual_pixels(controller, pixels, *, action):
+    """Address a controller's full 1D cable independently of segment settings."""
+    # WLED's `i` indices are segment-relative and honor grouping/reverse/etc.
+    # Also, power/brightness must be applied BEFORE the individual-color call.
+    # https://kno.wled.ge/interfaces/json-api/#per-segment-individual-led-control
+    prepared = _request_wled(
+        controller, "POST", controller["url"], action=f"{action}-prepare",
+        json={
+            "on": True, "bri": 255, "tt": 0,
+            "seg": {
+                "id": 0, "start": 0,
+                "stop": controller["end"] - controller["start"] + 1,
+                "on": True, "bri": 255, "fx": 0,
+                "grp": 1, "spc": 0, "of": 0, "rev": False, "mi": False,
+                "col": [[0, 0, 0]], "frz": False,
+            },
+        },
+    )
+    if prepared is None:
+        return None
+    return _request_wled(
+        controller, "POST", controller["url"], action=action,
+        # Resetting freeze makes WLED clear the preceding frame before it
+        # freezes again for `i`, including when a preview is already active.
+        json={"seg": {"id": 0, "frz": False, "i": pixels}},
+    )
+
+
 def sendPhysicalLeds(physical_led_ids, color="FF8B00"):
     """Illuminate physical cable LEDs directly for a temporary preview."""
     if not isinstance(physical_led_ids, (list, tuple, set)):
@@ -696,16 +724,8 @@ def sendPhysicalLeds(physical_led_ids, color="FF8B00"):
                 ])
         success = True
         if pixels:
-            success = _request_wled(
-                controller,
-                "POST",
-                controller["url"],
-                action="virtual-mapping-preview",
-                json={
-                    "on": True,
-                    "bri": 255,
-                    "seg": {"fx": 0, "i": pixels},
-                },
+            success = _send_individual_pixels(
+                controller, pixels, action="virtual-mapping-preview",
             ) is not None
         result = _controller_details(controller, index)
         result["success"] = success
@@ -773,14 +793,8 @@ def sendLightToBoulderwall(
 
         success = True
         if pixels:
-            success = _request_wled(
-                controller,
-                "POST",
-                controller["url"],
-                action="route-render",
-                # Explicitly return the segment to Solid. A celebration may
-                # have left a WLED effect active before this state is restored.
-                json={"on": True, "bri": 255, "seg": {"fx": 0, "i": pixels}},
+            success = _send_individual_pixels(
+                controller, pixels, action="route-render",
             ) is not None
         result = _controller_details(controller, index)
         result["success"] = success
@@ -848,16 +862,8 @@ def lightUpHoldId(holdid, color):
     for controller in controllers:
         if controller["start"] <= holdid <= controller["end"]:
             local_led_id = holdid - controller["start"]
-            return _request_wled(
-                controller,
-                "POST",
-                controller["url"],
-                action="single-led",
-                json={
-                    "on": True,
-                    "bri": 255,
-                    "seg": {"i": [local_led_id, color]},
-                },
+            return _send_individual_pixels(
+                controller, [local_led_id, color], action="single-led",
             )
 
     raise ValueError(f"LED ID {holdid} is not assigned to a WLED controller")

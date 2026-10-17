@@ -6,3 +6,10 @@ __pycache__/
 *.pyo
 *.db
 .vscode/
+.venv/
+.cache/
+.pytest_cache/
+.ruff_cache/
+db/
+*.db-shm
+*.db-wal

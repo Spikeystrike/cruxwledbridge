@@ -21,7 +21,8 @@ class Element {
     replaceChildren(...children) { this.children = []; this.append(...children); }
     add(option) { this.appendChild(option); }
     remove() { if (this.parent) this.parent.children = this.parent.children.filter(c => c !== this); this.removed = true; }
-    setAttribute() {}
+    setAttribute(name, value) { (this.attributes ??= {})[name] = String(value); }
+    getAttribute(name) { return this.attributes?.[name]; }
     addEventListener(type, handler) { (this.listeners[type] ??= []).push(handler); }
     fire(type, props = {}) { return Promise.all((this.listeners[type] || []).map(h => h({ preventDefault() {}, stopPropagation() {}, ...props }))); }
     getBoundingClientRect() { return { left: 0, top: 0, width: 200, height: 100 }; }
@@ -51,8 +52,13 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
 
 (async () => {
     assert.equal(ids.get('add-hole-mode').disabled, false);
+    assert.match(ids.get('manual-status').textContent, /manual.ready/);
     assert.deepEqual(order(), [0, 1, 2]);
-    run("addHoleMode.checked = true; manualInsertBefore.value = '1'");
+    await ids.get('add-hole-mode').fire('click');
+    assert.equal(ids.get('add-hole-mode').getAttribute('aria-pressed'), 'true');
+    assert.match(ids.get('manual-status').textContent, /manual.active/);
+    assert.match(ids.get('add-hole-mode').textContent, /manual.done/);
+    run("manualInsertBefore.value = '1'");
     // Image is displayed at twice the saved coordinate dimensions.
     await click(50, 40);
     assert.deepEqual(read('grids[0].manual_positions'), [{ id: -1, x: 25, y: 20, before_position_id: 1 }]);
@@ -65,7 +71,8 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
     assert.deepEqual(order(), [0, -1, -2, 1, 2]);
 
     // Normal marker clicks toggle only exclusions, never positional identity.
-    run('addHoleMode.checked = false');
+    await ids.get('add-hole-mode').fire('click');
+    assert.equal(ids.get('add-hole-mode').getAttribute('aria-pressed'), 'false');
     let marker = document.querySelectorAll('.grid-point').find(n => n.dataset.positionId === '-1');
     await marker.fire('click');
     assert.deepEqual(read('grids[0].excluded_position_ids'), [-1]);
@@ -81,7 +88,7 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
     assert.deepEqual(order(), [0, -2, 1, 2, -1]);
     run('loadGrid(1); loadGrid(0)');
     assert.deepEqual(order(), [0, -2, 1, 2, -1]);
-    assert.equal(ids.get('add-hole-mode').checked, false);
+    assert.equal(ids.get('add-hole-mode').getAttribute('aria-pressed'), 'false');
 
     // Remove first extra hole, preserving the other stable ID and labels.
     await ids.get('manual-list').children[0].children[2].fire('click');
@@ -100,15 +107,30 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
     assert.equal(document.body.inert, false);
     assert.deepEqual(order(), [0, -2, 1, 2]); // Failed save retains edits.
 
+    // A successful save/reload keeps the extra hole and the visible entry point.
+    const persistedGrids = read('grids');
+    context.fetch = async () => ({ ok: true, json: async () => ({ grids: persistedGrids, holds2led: { 'hold-b': 2 } }) });
+    await ids.get('submit-btn').fire('click');
+    assert.equal(ids.get('add-hole-mode').disabled, false);
+    assert.deepEqual(read('grids[0].manual_positions'), [{ id: -2, x: 35, y: 20, before_position_id: 1 }]);
+    await ids.get('add-hole-mode').fire('click');
+    await ids.get('image-container').fire('contextmenu');
+    assert.equal(ids.get('add-hole-mode').getAttribute('aria-pressed'), 'false');
+    assert.match(ids.get('manual-status').textContent, /manual.ready/);
+
     // Geometry changes require saving first; scaling updates both sources.
     ids.get('rows').value = 2;
     await ids.get('rows').fire('change');
     assert.equal(ids.get('add-hole-mode').disabled, true);
+    assert.match(ids.get('manual-status').textContent, /manual.pending/);
     run('savedCreation.coordinate_width = 50; savedCreation.coordinate_height = 25; normalizeSavedCreationCoordinates()');
     assert.deepEqual(read('grids[0].manual_positions[0]'), { id: -2, x: 70, y: 40, before_position_id: 1 });
     assert.deepEqual(read('grids[0].positions[-2]'), [70, 40]);
     await ids.get('reset-btn').fire('click');
     assert.deepEqual(read('grids[0].manual_positions'), []);
     assert.equal(ids.get('add-hole-mode').disabled, true);
+    assert.match(ids.get('manual-status').textContent, /manual.setup/);
+    await ids.get('add-hole-mode').fire('click');
+    assert.equal(ids.get('add-hole-mode').getAttribute('aria-pressed'), 'false');
     console.log('Manual-hole UI behavior passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

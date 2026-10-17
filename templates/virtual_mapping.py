@@ -37,6 +37,7 @@ TRANSLATIONS = {
         "help.corner_order": "Top left, top right, bottom right, bottom left",
         "help.mapping": "Calculate remains temporary and produces the same copyable list as before. Save mapping stores the selected board, setup, corners, CRUX hold IDs and physical LEDs in the bridge database.",
         "help.preview": "The preview lights the mapped physical cable LEDs orange. Stop it to restore the previous route or off state.",
+        "page.add_holes": "Edit wall grid / add individual holes",
         "button.calculate": "Calculate physical LED list",
         "button.new": "New / temporary",
         "button.save": "Save mapping",
@@ -104,6 +105,7 @@ TRANSLATIONS = {
         "help.corner_order": "Links oben, rechts oben, rechts unten, links unten",
         "help.mapping": "„Berechnen“ bleibt temporär und erzeugt dieselbe kopierbare Liste wie bisher. „Zuordnung speichern“ legt Board, Setup, Eckpunkte, CRUX-Griff-IDs und physische LEDs dauerhaft in der Bridge-Datenbank ab.",
         "help.preview": "Die Vorschau lässt die zugeordneten physischen Kabel-LEDs orange leuchten. Beim Beenden wird die vorherige Route beziehungsweise der ausgeschaltete Zustand wiederhergestellt.",
+        "page.add_holes": "Wandraster bearbeiten / einzelne Löcher hinzufügen",
         "button.calculate": "Physische LED-Liste berechnen",
         "button.new": "Neu / temporär",
         "button.save": "Zuordnung speichern",
@@ -161,6 +163,7 @@ def return_virtual_mapping_html(
         "__IMAGE_URL__": escape(str(wall.get("image_url") or ""), quote=True),
         "__CALCULATE_URL__": f"{path_prefix}/virtualmapping/calculate",
         "__PREVIEW_URL__": f"{path_prefix}/virtualmapping/preview",
+        "__WALL_EDIT_URL__": f"{path_prefix}/wallcreation?id={wall['id']}#manual-controls",
         "__MAPPINGS_URL__": f"{path_prefix}/virtualmapping/mappings",
         "__SAVED_MAPPINGS__": _script_json(saved_mappings or []),
         "__MOONBOARD_SETUPS__": _script_json(moonboard_setups or {}),
@@ -224,6 +227,7 @@ def return_virtual_mapping_html(
     <main>
         <h1 data-i18n="page.heading">Virtual MoonBoard mapping</h1>
         <p><strong>__WALL_NAME__</strong></p>
+        <p><a href="__WALL_EDIT_URL__" data-i18n="page.add_holes">Edit wall grid / add individual holes</a></p>
         <p class="intro" data-i18n="page.description">Calculate a temporary LED list as before, or save named MoonBoard installations for later use.</p>
 
         <section class="panel" id="saved-mappings-panel">

@@ -2441,6 +2441,8 @@ class VirtualMappingTests(unittest.TestCase):
         self.assertIn("physicalIds.join(', ')", html)
         self.assertIn("navigator.clipboard.writeText(output.value)", html)
         self.assertIn('id="preview-button"', html)
+        self.assertIn(f'/cruxwledbridge/wallcreation?id={self.wall_id}#manual-controls', html)
+        self.assertIn('Wandraster bearbeiten / einzelne Löcher hinzufügen', html)
         self.assertIn("physical_led_ids: ids, enabled", html)
         self.assertIn("navigator.sendBeacon(previewUrl, body)", html)
         self.assertIn("Vorschau beenden und Beleuchtung wiederherstellen", html)
@@ -2531,6 +2533,81 @@ class VirtualMappingTests(unittest.TestCase):
                     ))
 
         self.assertEqual(raised.exception.status_code, 400)
+
+    @patch("utils.requests.post")
+    def test_horizontal_wall_preview_lights_the_displayed_physical_ids(self, post):
+        # A horizontal wall and a vertical virtual board traverse the same
+        # coordinates differently. Physical mapping also spans two controllers.
+        wall_grid = utils.generate_grid(
+            (0, 0), (30, 0), (30, 20), (0, 20), 3, 4,
+            led_start_corner="top_left", led_direction="horizontal",
+        )
+        virtual_grid = utils.generate_grid(
+            (10, 0), (20, 0), (20, 20), (10, 20), 2, 2,
+            led_start_corner="top_left", led_direction="vertical",
+        )
+        hole_map = {i: [100 + 2 * i] for i in range(12)}
+        hole_map[10] = [120, 121]
+        mapping = utils.map_virtual_grid_to_physical_leds(
+            virtual_grid,
+            {"positions": wall_grid, "position_led_ids": {i: i for i in wall_grid}},
+            hole_map,
+        )
+        displayed_ids = [led for match in mapping["matches"] for led in match["physical_led_ids"]]
+        self.assertEqual(displayed_ids, [102, 118, 120, 121, 104])
+        self.assertEqual(mapping["physical_led_ids"], displayed_ids)
+
+        controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 111},
+            {"ip": "192.0.2.11", "start": 112, "end": 123},
+        ]
+        # WLED applies individual indices relative to the chosen segment,
+        # and requires power/brightness to be established in an earlier call.
+        states = {f"http://{c['ip']}/json/state": {
+            "on": False, "bri": 0,
+            "segment": {"start": 3, "stop": 8, "grp": 2, "spc": 1,
+                        "of": 2, "rev": True, "mi": True},
+            "lit": {7},
+        } for c in controllers}
+
+        def wled_request(url, *, json, timeout):
+            state = states[url]
+            was_on = state["on"]
+            state["on"] = json.get("on", state["on"])
+            state["bri"] = json.get("bri", state["bri"])
+            segment = json.get("seg", {})
+            if segment:
+                self.assertEqual(segment.get("id"), 0, "Never address whichever segment happens to be selected")
+            state["segment"].update(segment)
+            if "i" in segment:
+                self.assertTrue(was_on, "WLED must be on before individual colors are sent")
+                self.assertEqual(state["bri"], 255)
+                self.assertEqual(
+                    {k: state["segment"][k] for k in ("start", "stop", "grp", "spc", "of", "rev", "mi")},
+                    {"start": 0, "stop": 12, "grp": 1, "spc": 0, "of": 0, "rev": False, "mi": False},
+                )
+                if state["segment"].get("frz") is False:
+                    state["lit"].clear()
+                for led, color in zip(segment["i"][::2], segment["i"][1::2]):
+                    self.assertEqual(color, "FF8B00")
+                    state["lit"].add(led)
+                state["segment"]["frz"] = True
+            return Mock()
+
+        post.side_effect = wled_request
+        with patch.object(config, "wled_controllers", controllers), patch.object(main, "_celebration_active", False):
+            result = asyncio.run(main.preview_virtual_mapping(
+                main.VirtualMappingPreviewRequest(physical_led_ids=displayed_ids, enabled=True)
+            ))
+        self.assertEqual(result["status"], "ok")
+        lit_ids = set()
+        for controller in controllers:
+            lit_ids.update(controller["start"] + led for led in states[f"http://{controller['ip']}/json/state"]["lit"])
+        self.assertEqual(lit_ids, set(displayed_ids))
+        with patch.object(config, "wled_controllers", controllers):
+            utils.sendPhysicalLeds([104])
+        self.assertEqual(states["http://192.0.2.10/json/state"]["lit"], {4})
+        self.assertFalse(states["http://192.0.2.11/json/state"]["on"])
 
     def test_virtual_mapping_matches_across_grids_and_flattens_physical_leds(self):
         db = main.SessionLocal()
@@ -3191,6 +3268,7 @@ class DiagnosticsTests(unittest.TestCase):
                 "http://192.0.2.10/json/state",
                 "http://192.0.2.11/json/state",
                 "http://192.0.2.11/json/state",
+                "http://192.0.2.11/json/state",
             ],
         )
         self.assertTrue(all(call.kwargs["timeout"] == 1.25 for call in post.call_args_list))
@@ -3364,8 +3442,10 @@ class WledTests(unittest.TestCase):
         result = utils.sendLightToBoulderwall({1: "start"})
 
         self.assertEqual(result, {101: "FF0000"})
+        self.assertEqual(len(post.call_args_list), 3)
+        self.assertTrue(post.call_args_list[1].kwargs["json"]["on"])
         self.assertEqual(
-            post.call_args_list,
+            [post.call_args_list[0], post.call_args_list[-1]],
             [
                 call(
                     "http://192.0.2.10/json/state",
@@ -3375,9 +3455,7 @@ class WledTests(unittest.TestCase):
                 call(
                     "http://192.0.2.10/json/state",
                     json={
-                        "on": True,
-                        "bri": 255,
-                        "seg": {"fx": 0, "i": [1, "FF0000"]},
+                        "seg": {"id": 0, "frz": False, "i": [1, "FF0000"]},
                     },
                     timeout=2.0,
                 ),
@@ -3393,8 +3471,10 @@ class WledTests(unittest.TestCase):
         self.assertEqual(result, {101: "FF8B00", 102: "FF8B00"})
         self.assertEqual(result.operation["kind"], "virtual-mapping-preview")
         self.assertEqual(result.operation["status"], "ok")
+        self.assertEqual(len(post.call_args_list), 3)
+        self.assertTrue(post.call_args_list[1].kwargs["json"]["on"])
         self.assertEqual(
-            post.call_args_list,
+            [post.call_args_list[0], post.call_args_list[-1]],
             [
                 call(
                     "http://192.0.2.10/json/state",
@@ -3404,9 +3484,7 @@ class WledTests(unittest.TestCase):
                 call(
                     "http://192.0.2.10/json/state",
                     json={
-                        "on": True,
-                        "bri": 255,
-                        "seg": {"fx": 0, "i": [1, "FF8B00", 2, "FF8B00"]},
+                        "seg": {"id": 0, "frz": False, "i": [1, "FF8B00", 2, "FF8B00"]},
                     },
                     timeout=2.0,
                 ),
@@ -3429,6 +3507,7 @@ class WledTests(unittest.TestCase):
         post.side_effect = [
             Mock(),
             Mock(),
+            Mock(),
             utils.requests.ConnectionError("offline"),
         ]
 
@@ -3438,9 +3517,29 @@ class WledTests(unittest.TestCase):
         self.assertEqual(len(result.operation["successful_controllers"]), 1)
         self.assertEqual(len(result.operation["failed_controllers"]), 1)
         self.assertEqual(
-            post.call_args_list[1].kwargs["json"]["seg"]["i"],
+            post.call_args_list[2].kwargs["json"]["seg"]["i"],
             [1, "FF8B00"],
         )
+
+    @patch("utils.requests.post")
+    def test_failed_pixel_preparation_skips_colors_and_continues_other_controller(self, post):
+        config.wled_controllers = [
+            {"ip": "192.0.2.10", "start": 100, "end": 102},
+            {"ip": "192.0.2.11", "start": 200, "end": 202},
+        ]
+
+        def respond(url, *, json, timeout):
+            if "192.0.2.10" in url and json.get("on"):
+                raise utils.requests.ConnectionError("preparation failed")
+            return Mock()
+
+        post.side_effect = respond
+        result = utils.sendPhysicalLeds([101, 201])
+        self.assertEqual(result.operation["status"], "partial")
+        pixel_calls = [c for c in post.call_args_list if "i" in c.kwargs["json"].get("seg", {})]
+        self.assertEqual(len(pixel_calls), 1)
+        self.assertEqual(pixel_calls[0].args[0], "http://192.0.2.11/json/state")
+        self.assertEqual(pixel_calls[0].kwargs["json"]["seg"]["i"], [1, "FF8B00"])
 
     @patch("utils.requests.post")
     def test_bright_mode_sets_unselected_leds_to_dim_white(self, post):
@@ -3453,10 +3552,9 @@ class WledTests(unittest.TestCase):
             call(
                 "http://192.0.2.10/json/state",
                 json={
-                    "on": True,
-                    "bri": 255,
                     "seg": {
-                        "fx": 0,
+                        "id": 0,
+                        "frz": False,
                         "i": [
                             0,
                             "333333",
@@ -3592,9 +3690,7 @@ class WledTests(unittest.TestCase):
             call(
                 "http://192.0.2.10/json/state",
                 json={
-                    "on": True,
-                    "bri": 255,
-                    "seg": {"fx": 0, "i": [2, "FF0000", 3, "FF0000"]},
+                    "seg": {"id": 0, "frz": False, "i": [2, "FF0000", 3, "FF0000"]},
                 },
                 timeout=2.0,
             ),
@@ -3678,9 +3774,7 @@ class WledTests(unittest.TestCase):
             call(
                 "http://192.0.2.10/json/state",
                 json={
-                    "on": True,
-                    "bri": 255,
-                    "seg": {"i": [2, "00FF00"]},
+                    "seg": {"id": 0, "frz": False, "i": [2, "00FF00"]},
                 },
                 timeout=2.0,
             ),

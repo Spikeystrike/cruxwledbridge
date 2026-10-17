@@ -11,8 +11,38 @@ This repository is based on [raphirm/cruxwledbridge](https://github.com/raphirm/
 - **User interface:** The root URL is an English/German overview page linking to wall setup, lighting controls, general settings, and a system-status page. A successfully loaded gym slug is remembered locally in the browser as a directly accessible favorite and can be removed again. The status page checks the database and CRUX API, shows WLED reachability, firmware version, configured and reported LED counts, response time and recent errors, and offers read-only controller test buttons.
 - **Lighting controls and events:** Dark and bright wall modes are available, with independent 10%–100% controls for selected boulder LEDs, LEDs illuminating a hold from above in the combined above-and-below direction, and the white background in bright mode. In above-only mode, upper LEDs use the regular boulder brightness; the separate upper-brightness control is enabled only for above-and-below mode. Route holds can be illuminated from below, from above, or from both sides. A standard grid uses the same column one row higher for above-lighting; because alternating rows use opposite column parities, an alternating grid uses the same column two rows higher. If that exact position has no active LED, the hold retains its below light instead of substituting a lateral or more distant LED. One save button stores the complete lighting configuration. Lighting mode, all brightness values, hold-lighting direction, celebration effect, and the energy-saving timeout use a generic SQLite settings store that can also accept future settings, so they survive restarts. The timeout can switch an illuminated route off after a configurable number of minutes; `0` keeps it on, and every newly viewed route restarts the timer. A `climb.sent` gym webhook can trigger a configurable celebration effect, which can be disabled and restores the latest viewed climb afterward. Every WLED request has a short configurable timeout; a failed controller is logged and skipped without blocking the remaining controllers. Route webhooks distinguish full, partial, and failed output and expose the last request, last complete success, and last error on the status page. Access logging includes useful webhook details without duplicate Uvicorn access entries.
 - **Automated coverage:** Regression tests cover configuration startup, mapping layouts, multi-controller output, UI navigation, lighting modes, celebrations, and webhook behavior.
+- **Mapping verification and editing:** Physical LED previews, route output, and single-LED tests explicitly address segment 0 over the configured controller range with grouping, spacing, offset, reverse, and mirroring reset. Power and brightness are applied before individual colors, and each frame clears the previous one. The wall editor has a prominent **Add individual holes** button with readiness guidance; the virtual MoonBoard page links directly to that editor section.
+- **Local Windows development:** `dev.ps1` provides Python 3.12 setup, environment checks, the complete Python/Node test suite, and a localhost server with a project-local SQLite database. Virtual environments, package caches, and temporary files stay inside the project. Tested Windows dependencies are recorded separately from the container requirements. The additional lowercase `license` file is retained as `LICENSE.legacy` to avoid a Windows filename collision with `LICENSE`.
 
 > **Maintenance rule:** Whenever behavior in this repository is added, removed, or changed relative to `raphirm/cruxwledbridge`, update this section in the same commit.
+
+## Local development on Windows
+
+Use Python 3.12, matching the Docker image. In PowerShell, from this folder:
+
+```powershell
+.\dev.ps1 Setup
+.\dev.ps1 Check
+.\dev.ps1 Test
+```
+
+Setup creates `.venv`, installs `requirements.txt` using the tested Windows/Python 3.12 versions in `requirements-dev.lock.txt`, and copies `config/config.example.py` to `config/config.py` only if the latter is missing. Package downloads require network access. It can use the Python runtime bundled with Codex; otherwise specify an installed interpreter with `.\dev.ps1 Setup -Python C:\path\to\python.exe`. The interpreter used afterward is always `.venv\Scripts\python.exe`; activating the environment is unnecessary. If the underlying Python installation is removed, recreate `.venv` with an available Python 3.12 installation.
+
+`Test` runs the existing `unittest` suite with mocked configuration and an in-memory database; no real CRUX token or WLED controller is needed. Node.js is required for the JavaScript UI test. The helper uses Codex's bundled Node when available, then the Node installation on PATH; an explicit path can be supplied with `-Node C:\path\to\node.exe`. Missing Node fails clearly instead of silently skipping the UI test. `Check` verifies Python imports and package compatibility without loading personal configuration.
+
+The test command has a 120-second timeout with a diagnostic traceback. In a restricted Windows sandbox, Python's internal `asyncio` loopback socket may be blocked even though external services are mocked. In that case, run the tests in an approved execution context that permits local sockets; adding writable folders does not resolve this restriction.
+
+For a real local server, edit the ignored `config/config.py` with your CRUX token, controller ranges, and LED mapping, then run:
+
+```powershell
+.\dev.ps1 Run
+```
+
+Open `http://127.0.0.1:8000/` (or select a port with `-Port 8001`). The server runs in the foreground until Ctrl+C and stores its data in `db/app.db`. Local lighting actions use the configured controllers. The Docker configuration and production database are independent. No credentials are included in the repository.
+
+The helper confines temporary files and the pip cache to `.cache`, restores process environment variables afterward, and works when invoked from another directory. `.venv`, `.cache`, local databases, and `.env` are excluded from Git and Docker build contexts. If PowerShell blocks an unsigned script, run `powershell -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 Test` (or `Setup`, `Check`, `Run`); this applies only to that process.
+
+To deliberately update dependencies, install the updated requirements in `.venv`, regenerate `requirements-dev.lock.txt` with `python -m pip freeze`, then run the full test suite and `pip check` before committing the new versions. The lock is a Windows development snapshot, not a cross-platform production lock.
 
 ## Setup Container
 To get the bridge running, I recommend using a proxy for authenticating all URLs except `https://<bridge>/viewed`.
@@ -49,9 +79,11 @@ Both proxy examples require nginx-proxy support for `VIRTUAL_PATH` and `VIRTUAL_
 
 ### Adding individual holes
 
-Open Wall Creation and select the desired grid tab. Save its regular grid first, then enable **Add individual holes** and click the extra hole centres in the wall image. Choose **Insert in cable order** before placing a hole, or change its position afterward in the extra-hole list. You can insert before any structural grid position (including a disabled one) or at the end of that grid; holes at the same insertion point follow their creation order. The displayed LED numbers are logical IDs, which `hole2LEDS` translates to physical cable LEDs as before. Later LEDs and grid tabs are renumbered accordingly.
+From the virtual MoonBoard page, click **Edit wall grid / add individual holes** (German: **Wandraster bearbeiten / einzelne Löcher hinzufügen**). This opens the **Individual holes** section in Wall Creation; a matching shortcut is also at the top of Wall Creation. Select the desired grid tab and save its regular grid first. The section explains any prerequisites while the button is disabled. Click the purple **Add individual holes** button and then the extra hole centres in the wall image. Choose **Insert in cable order** before placing a hole, or change its position afterward in the extra-hole list. You can insert before any structural grid position (including a disabled one) or at the end of that grid; holes at the same insertion point follow their creation order. The displayed LED numbers are logical IDs, which `hole2LEDS` translates to physical cable LEDs as before. Later LEDs and grid tabs are renumbered accordingly.
 
-Disable the adding mode to toggle points on/off normally. Purple outlines identify extra holes; the list offers a remove button. **Save all grids** persists the coordinates, cable order, and exclusions. Resetting a grid also clears its extra holes. Extra holes remain at their chosen image coordinates if the regular grid geometry changes; if an insertion anchor no longer exists, move that hole to a valid cable position (or the end) before saving. Without a structural row/column, an extra hole uses its own below LED even in above-lighting modes.
+Click **Finish adding holes** to toggle points on/off normally. Purple outlines identify extra holes; the list offers a remove button. **Save all grids** persists the coordinates, cable order, and exclusions. Resetting a grid also clears its extra holes. Extra holes remain at their chosen image coordinates if the regular grid geometry changes; if an insertion anchor no longer exists, move that hole to a valid cable position (or the end) before saving. Without a structural row/column, an extra hole uses its own below LED even in above-lighting modes.
+
+The bridge owns segment 0 on each controller as one continuous 1D cable, starting at local LED 0. Direct output resets that segment's transformations so a mapped physical ID is not shifted, grouped, or reversed again. Configure cable direction in the bridge. Additional overlapping WLED segments and firmware-level 2D matrices/LED maps are separate transformations and should not be used for this 1D setup. See WLED's [individual LED control documentation](https://kno.wled.ge/interfaces/json-api/#per-segment-individual-led-control).
 
 ## Hardware used
 I use following hardware on the wall:

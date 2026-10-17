@@ -43,7 +43,12 @@ TRANSLATIONS = {
         "button.save": "Save all grids",
         "button.reset": "Reset grid",
         "manual.add": "Add individual holes",
-        "manual.help": "Save the grid first, enable this mode, then click each extra hole in the image. Choose where it belongs in this grid's cable order. These are logical LED IDs, translated separately through hole2LEDS. Save all grids to keep the changes.",
+        "manual.heading": "Individual holes",
+        "manual.done": "Finish adding holes",
+        "manual.help": "Add holes outside the regular grid by clicking their centres in the wall image. Select their place in the cable order and save all grids when finished.",
+        "manual.setup": "First select four corners and save the grid. You can then add individual holes here.",
+        "manual.ready": "Ready: click Add individual holes, then click the wall image below.",
+        "manual.active": "Adding holes: click each extra hole in the image. Finish adding to enable normal point selection again.",
         "manual.order": "Insert in cable order:",
         "manual.end": "At the end of this grid",
         "manual.before": "Before LED {led} (grid position {position})",
@@ -101,7 +106,12 @@ TRANSLATIONS = {
         "button.save": "Alle Raster speichern",
         "button.reset": "Raster zurücksetzen",
         "manual.add": "Einzelne Löcher hinzufügen",
-        "manual.help": "Raster zuerst speichern, diesen Modus aktivieren und dann jedes zusätzliche Loch im Bild anklicken. Wähle seine Stelle im Kabelverlauf dieses Rasters. Angezeigt werden logische LED-IDs; hole2LEDS übersetzt diese separat. Änderungen mit Alle Raster speichern übernehmen.",
+        "manual.heading": "Einzelne Löcher",
+        "manual.done": "Hinzufügen beenden",
+        "manual.help": "Zusätzliche Löcher außerhalb des regelmäßigen Rasters durch Anklicken ihrer Mitte im Wandbild ergänzen. Wähle ihre Stelle im Kabelverlauf und speichere anschließend alle Raster.",
+        "manual.setup": "Zuerst vier Eckpunkte auswählen und das Raster speichern. Danach kannst du hier einzelne Löcher hinzufügen.",
+        "manual.ready": "Bereit: Einzelne Löcher hinzufügen anklicken, danach unten ins Wandbild klicken.",
+        "manual.active": "Löcher hinzufügen ist aktiv: Klicke jedes Zusatzloch im Bild an. Mit Hinzufügen beenden kannst du wieder Punkte abwählen oder aktivieren.",
         "manual.order": "Im Kabelverlauf einfügen:",
         "manual.end": "Am Ende dieses Rasters",
         "manual.before": "Vor LED {led} (Rasterposition {position})",
@@ -172,6 +182,12 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         .grid-point.manual-point { outline: 2px solid #713ab6; outline-offset: 2px; }
         #manual-controls { width: min(100%, 900px); padding: 12px; box-sizing: border-box; border: 1px solid #aaa; border-radius: 7px; background: white; margin-bottom: 14px; }
         #manual-controls p { margin: 8px 0; font-size: 0.9em; }
+        #manual-controls { scroll-margin-top: 16px; border: 2px solid #713ab6; }
+        #manual-controls h2 { margin: 0 0 10px; font-size: 1.2em; }
+        #add-hole-mode { padding: 12px 18px; border: 0; border-radius: 5px; background: #713ab6; color: white; font-size: 1em; cursor: pointer; }
+        #add-hole-mode:disabled { background: #666; cursor: not-allowed; }
+        #add-hole-mode[aria-pressed="true"] { background: #345225; }
+        #manual-status { font-weight: 600; }
         #manual-list { max-height: 230px; overflow-y: auto; }
         .manual-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
         #manual-list button { cursor: pointer; }
@@ -180,6 +196,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 <body>
     <h1 data-i18n="page.heading">Climbing wall – select points</h1>
     <a class="secondary-link" href="__VIRTUAL_MAPPING_URL__" data-i18n="page.virtual_mapping">Open virtual MoonBoard mapping</a>
+    <a class="secondary-link" href="#manual-controls" data-i18n="manual.add">Add individual holes</a>
     <div id="grid-tabs" role="tablist" aria-label="Grids"></div>
     <div>
         <div class="form-row">
@@ -218,9 +235,11 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <p data-i18n="help.numbering">The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.</p>
     <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
     <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save all grids</b>.</p>
-    <section id="manual-controls">
-        <label><input id="add-hole-mode" type="checkbox" disabled> <span data-i18n="manual.add">Add individual holes</span></label>
-        <p data-i18n="manual.help">Save the grid first, then click extra holes in the image and choose their cable order.</p>
+    <section id="manual-controls" aria-labelledby="manual-heading">
+        <h2 id="manual-heading" data-i18n="manual.heading">Individual holes</h2>
+        <button id="add-hole-mode" type="button" aria-pressed="false" aria-describedby="manual-status" disabled>Add individual holes</button>
+        <p id="manual-status" role="status">First select four corners and save the grid.</p>
+        <p data-i18n="manual.help">Click extra holes in the image, choose their cable order, then save all grids.</p>
         <label for="manual-insert-before" data-i18n="manual.order">Insert in cable order:</label>
         <select id="manual-insert-before" disabled></select>
         <div id="manual-list"></div>
@@ -247,6 +266,8 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         const ledDirectionSelect = document.getElementById('led-direction');
         const autoExcludeEmptyCheckbox = document.getElementById('auto-exclude-empty');
         const addHoleMode = document.getElementById('add-hole-mode');
+        const manualStatus = document.getElementById('manual-status');
+        let addingManualHoles = false;
         const manualInsertBefore = document.getElementById('manual-insert-before');
         const manualList = document.getElementById('manual-list');
         const savedCreation = __SAVED_CREATION__;
@@ -417,7 +438,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         }
         function loadGrid(index) {
             captureActiveGrid();
-            addHoleMode.checked = false;
+            addingManualHoles = false;
             manualInsertBefore.value = '';
             activeGridIndex = index;
             const grid = grids[index];
@@ -460,7 +481,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             const ready = Boolean(renderedPositions && lastGridSettings && gridSettingsFor(grid) === lastGridSettings);
             addHoleMode.disabled = !ready;
             manualInsertBefore.disabled = !ready;
-            if (!ready) addHoleMode.checked = false;
+            if (!ready) addingManualHoles = false;
+            addHoleMode.textContent = t(addingManualHoles ? 'manual.done' : 'manual.add');
+            addHoleMode.setAttribute('aria-pressed', String(addingManualHoles));
+            manualStatus.textContent = t(!ready ? (renderedPositions ? 'manual.pending' : 'manual.setup') : (addingManualHoles ? 'manual.active' : 'manual.ready'));
             fillInsertionOptions(manualInsertBefore, manualInsertBefore.value === '' ? null : Number(manualInsertBefore.value));
             manualList.replaceChildren();
             grid.manual_positions.forEach((point, index) => {
@@ -501,7 +525,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 element.className = classes.join(' ');
                 element.addEventListener('click', (event) => {
                     event.stopPropagation();
-                    if (addHoleMode.checked) return;
+                    if (addingManualHoles) return;
                     if (excludedPositionIds.has(positionId)) excludedPositionIds.delete(positionId); else excludedPositionIds.add(positionId);
                     selectionDirty = true; captureActiveGrid(); renumberGrids(); positionLedIds = grids[activeGridIndex].position_led_ids;
                     renderTabs(); renderGrid(); updateGridStatus(); renderManualControls();
@@ -523,13 +547,18 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         }
 
         alternatingCheckbox.addEventListener('change', () => { alternatingStart.disabled = !alternatingCheckbox.checked; });
+        addHoleMode.addEventListener('click', () => {
+            if (addHoleMode.disabled) return;
+            addingManualHoles = !addingManualHoles;
+            renderManualControls();
+        });
         resetBtn.addEventListener('click', () => {
             points = []; renderedPositions = null; positionLedIds = {}; excludedPositionIds.clear(); selectionDirty = true; lastGridSettings = null;
             grids[activeGridIndex].manual_positions = [];
             captureActiveGrid(); renumberGrids(); renderTabs(); updateUI(); renderGrid(); renderManualControls();
         });
         imageContainer.addEventListener('click', (event) => {
-            if (addHoleMode.checked) {
+            if (addingManualHoles) {
                 captureActiveGrid();
                 const grid = grids[activeGridIndex];
                 if (!renderedPositions || gridSettingsFor(grid) !== lastGridSettings) { alert(t('manual.pending')); return; }
@@ -545,7 +574,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             const rect = climbingImage.getBoundingClientRect();
             points.push(displayToImage(event.clientX - rect.left, event.clientY - rect.top)); selectionDirty = true; updateUI();
         });
-        imageContainer.addEventListener('contextmenu', (event) => { event.preventDefault(); if (addHoleMode.checked) { addHoleMode.checked = false; return; } if (points.length > 0) { points.pop(); selectionDirty = true; captureActiveGrid(); updateUI(); renderManualControls(); } });
+        imageContainer.addEventListener('contextmenu', (event) => { event.preventDefault(); if (addingManualHoles) { addingManualHoles = false; renderManualControls(); return; } if (points.length > 0) { points.pop(); selectionDirty = true; captureActiveGrid(); updateUI(); renderManualControls(); } });
         for (const input of [rows, columns, alternatingCheckbox, alternatingStart, ledStartCornerSelect, ledDirectionSelect]) {
             input.addEventListener('change', () => { captureActiveGrid(); renderManualControls(); });
         }
