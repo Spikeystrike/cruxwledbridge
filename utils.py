@@ -477,40 +477,48 @@ def positions_near_holds(holds, grids, proximity_ratio=0.45):
     return occupied_positions
 
 
-def _wall_grid_inverse_transform(saved_grid, scale_x, scale_y):
-    """Recover the wall plane so 'below' follows its rows in a tilted photo."""
-    try:
-        corners = [
-            (float(point["x"]) * scale_x, float(point["y"]) * scale_y)
-            for point in saved_grid["points"]
-        ]
-        if len(corners) != 4:
-            return None
-        return np.linalg.inv(_grid_homography(*corners))
-    except (KeyError, TypeError, ValueError, np.linalg.LinAlgError):
-        # Older mappings may only contain image positions, without corners.
-        return None
+def grid_led_assignments(saved_settings):
+    """Translate grip IDs to LED IDs using each grid's explicit row offset.
 
-
-def _positions_at_or_below(positions, x, y, inverse_transform):
-    # A row in the flat wall plane becomes a line in the photograph. Testing
-    # that line avoids choosing a sideways point on a sloping upper row.
-    row_line = np.asarray((0.0, 1.0, -y))
-    if inverse_transform is not None:
-        projected = inverse_transform @ np.asarray((x, y, 1.0))
-        if not np.isclose(projected[2], 0.0):
-            row = projected[1] / projected[2]
-            row_line = inverse_transform[1] - row * inverse_transform[2]
-            if projected[2] < 0:
-                row_line = -row_line
-    a, b, c = row_line
-    # Generated grid coordinates are rounded to pixels. Treat the same row
-    # as level even if that rounding moves a point by half a pixel per axis.
-    tolerance = 0.5 * (abs(a) + abs(b)) + 1e-9
-    return [
-        position for position in positions
-        if a * position[1] + b * position[2] + c >= -tolerance
-    ]
+    Coordinates and cable numbering still describe the grip grid. For staggered
+    rows, the same ordinal from the left identifies the corresponding LED;
+    adding/subtracting a cable index would depend on serpentine direction.
+    """
+    assignments = {}
+    if not isinstance(saved_settings, dict):
+        return assignments
+    grids = saved_settings.get("grids") or [saved_settings]
+    for grid in grids:
+        if not isinstance(grid, dict):
+            continue
+        offset = grid.get("led_row_offset", 0)
+        if offset not in (-1, 1):
+            continue
+        try:
+            layout = generate_grid_position_layout(
+                int(grid["r"]), int(grid["c"]),
+                alternating=bool(grid.get("alternating", False)),
+                alternating_start_column=int(grid.get("alternating_start_column", 0)),
+                led_start_corner=grid.get("led_start_corner", "bottom_left"),
+                led_direction=grid.get("led_direction", "vertical"),
+            )
+            led_ids = {int(key): int(value) for key, value in grid["position_led_ids"].items()}
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        rows = {}
+        for position_id, (row, column) in layout.items():
+            rows.setdefault(row, []).append((column, position_id))
+        rows = {row: [position_id for _, position_id in sorted(points)] for row, points in rows.items()}
+        for row, positions in rows.items():
+            targets = rows.get(row + offset, [])
+            for column_index, position_id in enumerate(positions):
+                if position_id not in led_ids or column_index >= len(targets):
+                    continue
+                target = targets[column_index]
+                if target in led_ids:
+                    assignments[led_ids[position_id]] = led_ids[target]
+        # Missing/excluded targets and manual holes retain their own LED.
+    return assignments
 
 
 def map_virtual_grid_to_physical_leds(
@@ -520,7 +528,7 @@ def map_virtual_grid_to_physical_leds(
     target_width=None,
     target_height=None,
 ):
-    """Match virtual holds to the nearest LED at or below them in their grid."""
+    """Match virtual cable-order positions to physical LEDs across all grids."""
     if not isinstance(saved_settings, dict):
         raise ValueError("A saved wall mapping is required")
 
@@ -545,19 +553,13 @@ def map_virtual_grid_to_physical_leds(
         raise ValueError("Wall mapping coordinate dimensions are invalid") from exc
 
     active_positions = []
-    grid_positions = {}
-    grid_transforms = {}
-    for grid_index, saved_grid in enumerate(saved_grids):
+    for saved_grid in saved_grids:
         if not isinstance(saved_grid, dict):
             continue
         positions = saved_grid.get("positions", {})
         position_led_ids = saved_grid.get("position_led_ids", {})
         if not isinstance(positions, dict) or not isinstance(position_led_ids, dict):
             continue
-        grid_positions[grid_index] = []
-        grid_transforms[grid_index] = _wall_grid_inverse_transform(
-            saved_grid, scale_x, scale_y,
-        )
 
         for raw_position_id, raw_logical_led_id in position_led_ids.items():
             coordinates = positions.get(raw_position_id)
@@ -577,15 +579,14 @@ def map_virtual_grid_to_physical_leds(
                 continue
             if not np.isfinite((x, y)).all():
                 continue
-            position = (logical_led_id, x, y, grid_index)
-            active_positions.append(position)
-            grid_positions[grid_index].append(position)
+            active_positions.append((logical_led_id, x, y))
 
     if not active_positions:
         raise ValueError("The saved wall mapping has no active LED positions")
     if not isinstance(virtual_grid, dict) or not virtual_grid:
         raise ValueError("The virtual grid has no positions")
 
+    led_assignments = grid_led_assignments(saved_settings)
     hold_ids_by_logical_led = {}
     saved_holds2led = saved_settings.get("holds2led", {})
     if isinstance(saved_holds2led, dict):
@@ -610,38 +611,29 @@ def map_virtual_grid_to_physical_leds(
         except (TypeError, ValueError) as exc:
             raise ValueError("The virtual grid contains invalid coordinates") from exc
 
-        def distance_key(position):
-            return (
+        logical_led_id, source_x, source_y = min(
+            active_positions,
+            key=lambda position: (
                 (position[1] - virtual_x) ** 2
                 + (position[2] - virtual_y) ** 2,
                 position[0],
-            )
-
-        # First identify the local wall section. Searching below globally
-        # could jump to a different plane or an unrelated lower wall grid.
-        nearest = min(active_positions, key=distance_key)
-        grid_index = nearest[3]
-        below_positions = _positions_at_or_below(
-            grid_positions[grid_index], virtual_x, virtual_y,
-            grid_transforms[grid_index],
+            ),
         )
-        logical_led_id, source_x, source_y, _ = min(
-            below_positions, key=distance_key,
-        ) if below_positions else nearest
-        physical_led_ids = hole2leds.get(logical_led_id)
+        assigned_led_id = led_assignments.get(logical_led_id, logical_led_id)
+        physical_led_ids = hole2leds.get(assigned_led_id)
         if physical_led_ids is None:
-            physical_led_ids = hole2leds.get(str(logical_led_id))
+            physical_led_ids = hole2leds.get(str(assigned_led_id))
         if isinstance(physical_led_ids, int):
             physical_led_ids = [physical_led_ids]
         if not isinstance(physical_led_ids, (list, tuple)) or not physical_led_ids:
             raise ValueError(
-                f"Logical LED {logical_led_id} has no physical hole2LEDS mapping"
+                f"Logical LED {assigned_led_id} has no physical hole2LEDS mapping"
             )
         try:
             physical_led_ids = [int(led_id) for led_id in physical_led_ids]
         except (TypeError, ValueError) as exc:
             raise ValueError(
-                f"Logical LED {logical_led_id} has an invalid hole2LEDS mapping"
+                f"Logical LED {assigned_led_id} has an invalid hole2LEDS mapping"
             ) from exc
 
         distance = float(np.hypot(source_x - virtual_x, source_y - virtual_y))
@@ -651,6 +643,7 @@ def map_virtual_grid_to_physical_leds(
             "virtual_x": round(virtual_x),
             "virtual_y": round(virtual_y),
             "logical_led_id": logical_led_id,
+            "assigned_led_id": assigned_led_id,
             "crux_hold_ids": hold_ids_by_logical_led.get(logical_led_id, []),
             "physical_led_ids": physical_led_ids,
             "source_x": round(source_x),

@@ -1283,6 +1283,20 @@ class DefineHoldsTests(unittest.TestCase):
         again = asyncio.run(main.define_holds(reopened))
         self.assertEqual(again["grid"], result["grid"])
 
+    def test_led_row_assignment_persists_without_moving_grips_or_numbering(self):
+        original = asyncio.run(main.define_holds(self.manual_payload(r=2)))
+        changed = asyncio.run(main.define_holds(self.manual_payload(r=2, led_row_offset=1)))
+        self.assertEqual(changed["positions"], original["positions"])
+        self.assertEqual(changed["position_led_ids"], original["position_led_ids"])
+        self.assertEqual(changed["holds2led"], original["holds2led"])
+        with main.SessionLocal() as db:
+            saved = db.query(main.WallCreationDB).filter_by(wallid=self.wall_id).one().settings
+        self.assertEqual(saved["led_row_offset"], 1)
+        self.assertEqual(changed["grids"][0]["led_row_offset"], 1)
+        for invalid in (-2, 2, True, "1"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                self.manual_payload(led_row_offset=invalid)
+
     def test_manual_holes_bypass_auto_exclusion_but_allow_manual_toggle(self):
         auto = asyncio.run(main.define_holds(self.manual_payload(apply_auto_exclusions=True)))
         self.assertIn(-1, auto["position_led_ids"])
@@ -2359,6 +2373,115 @@ class PathPrefixTests(unittest.TestCase):
         self.assertIn("offset += activeIds.length", html)
 
 
+class GridLedAssignmentTests(unittest.TestCase):
+    @staticmethod
+    def actual_grid():
+        # Geometry from the reported 8x6 staggered grid, stripped of wall IDs.
+        corners = [(715, 159), (952, 169), (909, 467), (703, 466)]
+        return {
+            "r": 8, "c": 6, "alternating": True, "alternating_start_column": 1,
+            "led_start_corner": "bottom_right", "led_direction": "horizontal",
+            "points": [{"x": x, "y": y} for x, y in corners],
+            "positions": utils.generate_grid(
+                *corners, 8, 6, alternating=True, alternating_start_column=1,
+                led_start_corner="bottom_right", led_direction="horizontal",
+            ),
+            "position_led_ids": {i: 323 + i for i in range(24)},
+        }
+
+    def test_actual_staggered_grip_coordinates_keep_matching_then_assign_lower_leds(self):
+        grid = self.actual_grid()
+        # F12/G12/H12 through F9/G9/H9, from the saved MoonBoard mapping.
+        virtual = dict(enumerate([
+            (768, 158), (863, 162), (956, 165),
+            (761, 255), (853, 257), (942, 259),
+            (755, 345), (843, 345), (929, 346),
+            (749, 427), (834, 427), (917, 426),
+        ]))
+        # Actual controller mapping skips physical LED 342 in this section.
+        hole_map = {i: [i + (10 if i < 332 else 11)] for i in range(323, 347)}
+        settings = {"grids": [grid], "holds2led": {"grip-left": 326}}
+        original = utils.map_virtual_grid_to_physical_leds(virtual, settings, hole_map)
+        self.assertEqual(original["physical_led_ids"], [355, 356, 357, 349, 350, 351, 343, 344, 345, 336, 337, 338])
+        grid["led_row_offset"] = 1
+        settings = json.loads(json.dumps(settings))  # SQLite/HTTP use string keys.
+        corrected = utils.map_virtual_grid_to_physical_leds(virtual, settings, hole_map)
+        self.assertEqual(corrected["physical_led_ids"], [354, 353, 352, 348, 347, 346, 341, 340, 339, 335, 334, 333])
+        for before, after in zip(original["matches"], corrected["matches"]):
+            for key in ("source_x", "source_y", "logical_led_id", "crux_hold_ids", "distance"):
+                self.assertEqual(after[key], before[key], key)
+        self.assertEqual(corrected["matches"][9]["crux_hold_ids"], ["grip-left"])
+        # Small placement differences must not move to a different grip row.
+        shifted = utils.map_virtual_grid_to_physical_leds(
+            {i: (x, y + 8) for i, (x, y) in virtual.items()}, settings, hole_map,
+        )
+        self.assertEqual(shifted["physical_led_ids"], corrected["physical_led_ids"])
+
+    def test_other_grids_keep_nearest_grip_even_when_it_is_slightly_above(self):
+        grid = self.actual_grid()
+        grid["led_row_offset"] = 1
+        other = {"positions": {0: (10, 10), 1: (10, 40)}, "position_led_ids": {0: 500, 1: 501}}
+        result = utils.map_virtual_grid_to_physical_leds(
+            {0: (10, 12)}, {"grids": [grid, other]}, {500: [900], 501: [901]},
+        )
+        self.assertEqual(result["physical_led_ids"], [900])
+        self.assertEqual(result["matches"][0]["source_y"], 10)
+
+    def test_assignment_uses_row_position_for_every_cable_start_and_direction(self):
+        for direction in ("horizontal", "vertical"):
+            for corner in ("top_left", "top_right", "bottom_left", "bottom_right"):
+                with self.subTest(direction=direction, corner=corner):
+                    layout = utils.generate_grid_position_layout(
+                        8, 6, alternating=True, alternating_start_column=1,
+                        led_start_corner=corner, led_direction=direction,
+                    )
+                    by_coordinates = {value: key for key, value in layout.items()}
+                    settings = {**self.actual_grid(), "led_direction": direction, "led_start_corner": corner, "led_row_offset": 1}
+                    assignments = utils.grid_led_assignments(settings)
+                    for source, target in (((6, 1), (7, 0)), ((6, 3), (7, 2)), ((6, 5), (7, 4))):
+                        self.assertEqual(assignments[323 + by_coordinates[source]], 323 + by_coordinates[target])
+                    settings["led_row_offset"] = -1
+                    self.assertEqual(utils.grid_led_assignments(settings)[323 + by_coordinates[(7, 0)]], 323 + by_coordinates[(6, 1)])
+
+    def test_missing_targets_and_manual_holes_do_not_shift_other_columns(self):
+        grid = self.actual_grid()
+        grid["led_row_offset"] = 1
+        grid["position_led_ids"].pop(1)  # Lower middle position is disabled.
+        grid["position_led_ids"][-1] = 600
+        assignments = utils.grid_led_assignments(grid)
+        self.assertNotIn(327, assignments)
+        self.assertNotIn(600, assignments)
+        self.assertNotIn(323, assignments)  # No row below the grid boundary.
+        self.assertEqual(assignments[326], 325)
+        self.assertEqual(assignments[328], 323)
+        # With odd column counts, the next staggered row can be shorter.
+        self.assertEqual(utils.grid_led_assignments({
+            "r": 2, "c": 5, "alternating": True,
+            "led_start_corner": "top_left", "led_direction": "horizontal",
+            "led_row_offset": 1, "position_led_ids": {i: i for i in range(5)},
+        }), {0: 4, 1: 3})
+
+    def test_viewed_route_uses_the_same_assignment_as_virtual_preview(self):
+        grid = {**self.actual_grid(), "led_row_offset": 1}
+        payload = types.SimpleNamespace(payload=types.SimpleNamespace(
+            id=123, name="Grid calibration", wall_id=456,
+            image_url="https://example.com/wall.jpg",
+            holds=[types.SimpleNamespace(id=str(i), hold_type="start") for i in (326, 327, 328)],
+        ))
+        with patch("main.SessionLocal") as session, patch("main.sendLightToBoulderwall") as send, \
+                patch("main.schedule_route_timeout"), patch("main._record_route_diagnostic"), \
+                patch.object(main, "hold_lighting_direction", "below"), \
+                patch.object(main, "_celebration_active", False), \
+                patch.object(main, "current_wall_holds", {}), \
+                patch.object(main, "_pending_viewed_holds", None), \
+                patch.object(main, "_route_lighting_active", False):
+            session.return_value.query.return_value.filter.return_value.first.side_effect = [
+                types.SimpleNamespace(ledid=i) for i in (326, 327, 328)
+            ] + [types.SimpleNamespace(settings=grid)]
+            asyncio.run(main.viewed(payload, AccessLoggingTests.make_request()))
+        self.assertEqual(send.call_args.args[0], {325: "start", 324: "start", 323: "start"})
+
+
 class VirtualMappingTests(unittest.TestCase):
     wall_id = 987670
 
@@ -2608,123 +2731,6 @@ class VirtualMappingTests(unittest.TestCase):
             utils.sendPhysicalLeds([104])
         self.assertEqual(states["http://192.0.2.10/json/state"]["lit"], {4})
         self.assertFalse(states["http://192.0.2.11/json/state"]["on"])
-
-    def test_virtual_mapping_uses_333_334_335_below_instead_of_338_337_336_above(self):
-        # The upper row is closer, but the LEDs below the holds are wanted.
-        # Horizontal serpentine wiring reverses the two rows' cable order.
-        saved = {
-            "coordinate_width": 100, "coordinate_height": 100,
-            "holds2led": {"left": 0, "middle": 1, "right": 2},
-            "grids": [{
-                "r": 2, "c": 3,
-                "led_start_corner": "bottom_left", "led_direction": "horizontal",
-                "points": [{"x": 0, "y": 0}, {"x": 20, "y": 0},
-                           {"x": 20, "y": 20}, {"x": 0, "y": 20}],
-                "positions": {"0": [0, 20], "1": [10, 20], "2": [20, 20],
-                              "3": [20, 0], "4": [10, 0], "5": [0, 0]},
-                "position_led_ids": {str(i): i for i in range(6)},
-            }],
-        }
-        with main.SessionLocal() as db:
-            db.query(main.WallCreationDB).filter_by(wallid=self.wall_id).one().settings = saved
-            db.commit()
-        with patch.object(config, "hole2LEDS", {i: [333 + i] for i in range(6)}):
-            result = asyncio.run(main.calculate_virtual_mapping(
-                main.VirtualMappingRequest(
-                    wallid=self.wall_id,
-                    p1x=0, p1y=8, p2x=20, p2y=8,
-                    p3x=20, p3y=18, p4x=0, p4y=18,
-                    r=1, c=3, led_start_corner="top_left", led_direction="horizontal",
-                )
-            ))
-        self.assertEqual(result["physical_led_ids"], [333, 334, 335])
-        self.assertEqual([m["source_y"] for m in result["matches"]], [20, 20, 20])
-        self.assertEqual([m["crux_hold_ids"] for m in result["matches"]], [["left"], ["middle"], ["right"]])
-
-    def test_virtual_below_mapping_is_independent_of_cable_direction_and_start(self):
-        for direction in ("horizontal", "vertical"):
-            for corner in ("top_left", "top_right", "bottom_left", "bottom_right"):
-                with self.subTest(direction=direction, corner=corner):
-                    positions = utils.generate_grid(
-                        (0, 0), (20, 0), (20, 20), (0, 20), 2, 3,
-                        led_start_corner=corner, led_direction=direction,
-                    )
-                    result = utils.map_virtual_grid_to_physical_leds(
-                        {0: (0, 8), 1: (10, 8), 2: (20, 8)},
-                        {"positions": positions, "position_led_ids": {i: i for i in positions}},
-                        {i: [500 + i] for i in positions},
-                    )
-                    self.assertEqual(
-                        [(m["source_x"], m["source_y"]) for m in result["matches"]],
-                        [(0, 20), (10, 20), (20, 20)],
-                    )
-
-    def test_virtual_below_mapping_follows_sloping_rows_and_image_scaling(self):
-        # Upper row y=0,8,16 slopes down to the right in the photograph.
-        # A screen-y-only filter would pick the upper-right LED instead.
-        # Among LEDs on the lower row, the lower-left one is closest in the image.
-        saved = {
-            "coordinate_width": 40, "coordinate_height": 40,
-            "points": [{"x": 0, "y": 0}, {"x": 20, "y": 16},
-                       {"x": 20, "y": 36}, {"x": 0, "y": 20}],
-            "positions": {0: [0, 20], 1: [10, 28], 2: [20, 36],
-                          3: [20, 16], 4: [10, 8], 5: [0, 0]},
-            "position_led_ids": {i: i for i in range(6)},
-        }
-        for scale in (1, 2):
-            with self.subTest(scale=scale):
-                result = utils.map_virtual_grid_to_physical_leds(
-                    {0: (10 * scale, 12 * scale)}, saved,
-                    {i: [333 + i] for i in range(6)},
-                    target_width=40 * scale, target_height=40 * scale,
-                )
-                self.assertEqual(result["physical_led_ids"], [333])
-                self.assertEqual(result["matches"][0]["source_y"], 20 * scale)
-
-    def test_virtual_below_mapping_stays_in_the_nearest_wall_grid(self):
-        saved = {"grids": [
-            {"positions": {0: [10, 0], 1: [10, 20]}, "position_led_ids": {0: 0, 1: 1}},
-            {"positions": {0: [12, 15]}, "position_led_ids": {0: 2}},
-        ]}
-        hole_map = {0: [338], 1: [333], 2: [700]}
-        # The other grid has a closer lower LED, but the hold belongs to grid 1.
-        result = utils.map_virtual_grid_to_physical_leds({0: (10, 5)}, saved, hole_map)
-        self.assertEqual(result["physical_led_ids"], [333])
-        # If this grid has no lower LED, preserve its nearest position.
-        saved["grids"][0]["position_led_ids"].pop(1)
-        result = utils.map_virtual_grid_to_physical_leds({0: (10, 5)}, saved, hole_map)
-        self.assertEqual(result["physical_led_ids"], [338])
-
-    def test_virtual_below_mapping_keeps_exact_matches_and_manual_holes(self):
-        saved = {
-            "positions": {0: [0, 0], 1: [0, 20], -1: [0, 10]},
-            "position_led_ids": {0: 0, 1: 1, -1: 2},
-        }
-        result = utils.map_virtual_grid_to_physical_leds(
-            {0: (0, 0), 1: (0, 4), 2: (0, 20), 3: (0, 25)},
-            saved, {0: [338], 1: [333], 2: [700, 701]},
-        )
-        self.assertEqual(result["physical_led_ids"], [338, 700, 701, 333, 333])
-        self.assertEqual([m["source_y"] for m in result["matches"]], [0, 10, 20, 20])
-
-    def test_saved_virtual_mapping_recalculates_the_lower_led_on_update(self):
-        saved = asyncio.run(main.save_moonboard_mapping(
-            self._saved_mapping_request()
-        ))["mapping"]
-        # Updating an existing installation must replace its stored wrong row.
-        with main.SessionLocal() as db:
-            db.query(main.WallCreationDB).filter_by(wallid=self.wall_id).one().settings = {
-                "positions": {"0": [0, -10], "1": [0, 110]},
-                "position_led_ids": {"0": 0, "1": 1},
-            }
-            db.commit()
-        updated = asyncio.run(main.save_moonboard_mapping(
-            self._saved_mapping_request(mapping_id=saved["id"])
-        ))["mapping"]
-        self.assertEqual(updated["id"], saved["id"])
-        self.assertEqual(set(updated["mapping"]["physical_led_ids"]), {600, 601})
-        reloaded = asyncio.run(main.list_saved_moonboard_mappings(self.wall_id))["mappings"]
-        self.assertEqual(reloaded[0]["mapping"], updated["mapping"])
 
     def test_virtual_mapping_matches_across_grids_and_flattens_physical_leds(self):
         db = main.SessionLocal()

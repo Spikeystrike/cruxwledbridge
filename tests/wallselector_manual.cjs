@@ -95,6 +95,18 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
     assert.deepEqual(order(), [0, -2, 1, 2]);
     assert.deepEqual(read('grids[0].position_hold_ids'), { 1: 'hold-b' });
 
+    // LED calibration changes only this tab's assignment, not its geometry.
+    assert.equal(ids.get('led-row-offset').value, '0');
+    const positionsBeforeCalibration = read('grids[0].positions');
+    ids.get('led-row-offset').value = '1';
+    await ids.get('led-row-offset').fire('change');
+    run('loadGrid(1)');
+    assert.equal(ids.get('led-row-offset').value, '0');
+    run('loadGrid(0)');
+    assert.equal(ids.get('led-row-offset').value, '1');
+    assert.deepEqual(read('grids[0].positions'), positionsBeforeCalibration);
+    assert.equal(ids.get('add-hole-mode').disabled, false);
+
     // Capture the real outbound request (no network or persistent writes).
     let sent;
     context.fetch = async (_url, options) => {
@@ -104,6 +116,9 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
     };
     await ids.get('submit-btn').fire('click');
     assert.deepEqual(sent.grids[0].manual_positions, [{ id: -2, x: 35, y: 20, before_position_id: 1 }]);
+    assert.equal(sent.grids[0].led_row_offset, 1);
+    assert.equal(sent.grids[1].led_row_offset, 0);
+    assert.equal(sent.grids[0].apply_auto_exclusions, false);
     assert.equal(document.body.inert, false);
     assert.deepEqual(order(), [0, -2, 1, 2]); // Failed save retains edits.
 
@@ -113,6 +128,7 @@ const click = (x, y) => ids.get('image-container').fire('click', { clientX: x, c
     await ids.get('submit-btn').fire('click');
     assert.equal(ids.get('add-hole-mode').disabled, false);
     assert.deepEqual(read('grids[0].manual_positions'), [{ id: -2, x: 35, y: 20, before_position_id: 1 }]);
+    assert.equal(ids.get('led-row-offset').value, '1');
     await ids.get('add-hole-mode').fire('click');
     await ids.get('image-container').fire('contextmenu');
     assert.equal(ids.get('add-hole-mode').getAttribute('aria-pressed'), 'false');

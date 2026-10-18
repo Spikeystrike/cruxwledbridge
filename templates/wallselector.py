@@ -31,6 +31,11 @@ TRANSLATIONS = {
         "form.bottom_right": "Bottom right",
         "form.horizontal": "Horizontal (row by row)",
         "form.vertical": "Vertical (column by column)",
+        "form.led_row": "LED assignment for this grid:",
+        "form.led_row_same": "Unchanged",
+        "form.led_row_below": "One grid row below",
+        "form.led_row_above": "One grid row above",
+        "help.led_row": "The points mark grip holes. If their LEDs belong to an adjacent row, select it here. Staggered rows use the same position counted from the left. Missing positions and individual extra holes keep their original assignment.",
         "form.auto_exclude_empty": "Automatically disable positions without a nearby hold",
         "help.alternating": "For an alternating grid, Columns is the number of all possible horizontal positions. It can be even or odd; the positions used alternate from row to row.",
         "help.numbering": "The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.",
@@ -94,6 +99,11 @@ TRANSLATIONS = {
         "form.bottom_right": "Unten rechts",
         "form.horizontal": "Horizontal (zeilenweise)",
         "form.vertical": "Vertikal (spaltenweise)",
+        "form.led_row": "LED-Zuordnung für dieses Raster:",
+        "form.led_row_same": "Unverändert",
+        "form.led_row_below": "Eine Rasterreihe darunter",
+        "form.led_row_above": "Eine Rasterreihe darüber",
+        "help.led_row": "Die Punkte markieren Grifflöcher. Gehören ihre LEDs zur benachbarten Reihe, wähle sie hier aus. Bei versetzten Reihen zählt dieselbe Stelle von links. Bei fehlenden Positionen und einzelnen Zusatzlöchern bleibt die ursprüngliche Zuordnung erhalten.",
         "form.auto_exclude_empty": "Positionen ohne Griff in der Nähe automatisch abwählen",
         "help.alternating": "Beim alternierenden Raster ist Spalten die Anzahl aller möglichen horizontalen Positionen. Die Zahl darf gerade oder ungerade sein; die verwendeten Positionen wechseln von Reihe zu Reihe.",
         "help.numbering": "Das erste Raster beginnt bei LED 0. Jedes weitere Raster setzt nach dem vorherigen Tab fort; ziehe die Tabs, um die Reihenfolge zu ändern.",
@@ -235,6 +245,15 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <p data-i18n="help.numbering">The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.</p>
     <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
     <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save all grids</b>.</p>
+    <div class="form-row">
+        <label for="led-row-offset" data-i18n="form.led_row">LED assignment for this grid:</label>
+        <select id="led-row-offset">
+            <option value="0" data-i18n="form.led_row_same">Unchanged</option>
+            <option value="1" data-i18n="form.led_row_below">One grid row below</option>
+            <option value="-1" data-i18n="form.led_row_above">One grid row above</option>
+        </select>
+    </div>
+    <p data-i18n="help.led_row">The points mark grip holes. If their LEDs belong to an adjacent row, select it here. Staggered rows use the same position counted from the left. Missing positions and individual extra holes keep their original assignment.</p>
     <section id="manual-controls" aria-labelledby="manual-heading">
         <h2 id="manual-heading" data-i18n="manual.heading">Individual holes</h2>
         <button id="add-hole-mode" type="button" aria-pressed="false" aria-describedby="manual-status" disabled>Add individual holes</button>
@@ -264,6 +283,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         const columns = document.getElementById('columns');
         const ledStartCornerSelect = document.getElementById('led-start-corner');
         const ledDirectionSelect = document.getElementById('led-direction');
+        const ledRowOffsetSelect = document.getElementById('led-row-offset');
         const autoExcludeEmptyCheckbox = document.getElementById('auto-exclude-empty');
         const addHoleMode = document.getElementById('add-hole-mode');
         const manualStatus = document.getElementById('manual-status');
@@ -286,7 +306,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
         function createEmptyGrid() {
-            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, manual_positions: [], position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: true, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', selection_dirty: false, last_grid_settings: null };
+            return { id: `grid-${Date.now()}-${Math.random().toString(16).slice(2)}`, points: [], positions: null, manual_positions: [], position_led_ids: {}, position_hold_ids: {}, excluded_position_ids: [], auto_exclude_empty: true, r: null, c: null, alternating: false, alternating_start_column: 0, led_start_corner: 'bottom_left', led_direction: 'vertical', led_row_offset: 0, selection_dirty: false, last_grid_settings: null };
         }
         function normalizeGrid(grid, index) {
             return { ...createEmptyGrid(), ...grid, id: grid.id || `grid-${index + 1}`, points: grid.points || [], positions: grid.positions || null, position_led_ids: grid.position_led_ids || {}, position_hold_ids: grid.position_hold_ids || {}, excluded_position_ids: grid.excluded_position_ids || [] };
@@ -339,6 +359,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             grid.alternating_start_column = numericValue(alternatingStart) ?? 0;
             grid.led_start_corner = ledStartCornerSelect.value;
             grid.led_direction = ledDirectionSelect.value;
+            grid.led_row_offset = Number(ledRowOffsetSelect.value);
             grid.auto_exclude_empty = autoExcludeEmptyCheckbox.checked;
             grid.selection_dirty = selectionDirty;
             grid.last_grid_settings = lastGridSettings;
@@ -453,6 +474,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             alternatingStart.disabled = !alternatingCheckbox.checked;
             ledStartCornerSelect.value = grid.led_start_corner || 'bottom_left';
             ledDirectionSelect.value = grid.led_direction || 'vertical';
+            ledRowOffsetSelect.value = grid.led_row_offset || 0;
             autoExcludeEmptyCheckbox.checked = grid.auto_exclude_empty !== false;
             lastGridSettings = grid.last_grid_settings;
             if (!lastGridSettings && points.length === 4 && renderedPositions) lastGridSettings = gridSettingsFor(grid);
@@ -578,6 +600,9 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         for (const input of [rows, columns, alternatingCheckbox, alternatingStart, ledStartCornerSelect, ledDirectionSelect]) {
             input.addEventListener('change', () => { captureActiveGrid(); renderManualControls(); });
         }
+        ledRowOffsetSelect.addEventListener('change', () => {
+            selectionDirty = true; captureActiveGrid(); updateGridStatus();
+        });
         function redraw() { updateUI(); renderGrid(); updateGridStatus(); renderManualControls(); }
         window.addEventListener('resize', redraw);
         if ('ResizeObserver' in window) new ResizeObserver(() => { if (savedCreationInitialized) redraw(); }).observe(climbingImage);
@@ -604,6 +629,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                     p3x: grid.points[2].x, p3y: grid.points[2].y, p4x: grid.points[3].x, p4y: grid.points[3].y,
                     r: grid.r, c: grid.c, alternating: Boolean(grid.alternating), alternating_start_column: Number(grid.alternating_start_column || 0),
                     led_start_corner: grid.led_start_corner, led_direction: grid.led_direction, excluded_position_ids: grid.excluded_position_ids,
+                    led_row_offset: grid.led_row_offset,
                     auto_exclude_empty: Boolean(grid.auto_exclude_empty),
                     apply_auto_exclusions: Boolean(grid.apply_auto_exclusions),
                     manual_positions: grid.manual_positions,

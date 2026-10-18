@@ -21,6 +21,7 @@ from utils import (
     CELEBRATION_EFFECTS,
     generate_grid,
     generate_grid_position_layout,
+    grid_led_assignments,
     get_last_wled_operation,
     ledCalculation,
     lightUpHoldId,
@@ -842,6 +843,7 @@ class GridTranslation(BaseModel):
     alternating_start_column: int = 0
     led_start_corner: str = "bottom_left"
     led_direction: str = "vertical"
+    led_row_offset: int = Field(default=0, ge=-1, le=1, strict=True)
     excluded_position_ids: List[int] = Field(default_factory=list)
     auto_exclude_empty: bool = True
     apply_auto_exclusions: bool = False
@@ -982,6 +984,8 @@ async def viewed(payload: PayL, request: Request):
             saved_creation.settings if saved_creation else None,
             hold_lighting_direction,
         )
+        assignments = grid_led_assignments(saved_creation.settings if saved_creation else None)
+        holds = {assignments.get(led_id, led_id): hold_type for led_id, hold_type in holds.items()}
         async with _lighting_state_lock:
             if _celebration_active:
                 # Keep the running celebration untouched. If several viewed
@@ -1889,6 +1893,7 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
             "alternating_start_column": grid_payload.alternating_start_column,
             "led_start_corner": grid_payload.led_start_corner,
             "led_direction": grid_payload.led_direction,
+            "led_row_offset": grid_payload.led_row_offset,
             "auto_exclude_empty": grid_payload.auto_exclude_empty,
             "excluded_position_ids": sorted(excluded_position_ids),
             "positions": full_grid,
