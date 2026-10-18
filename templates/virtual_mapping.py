@@ -8,6 +8,7 @@ TRANSLATIONS = {
     "en": {
         "page.title": "Virtual MoonBoard mapping",
         "page.heading": "Virtual MoonBoard mapping",
+        "page.led_layout": "LEDs · independent grids and associations",
         "page.description": "Calculate a temporary LED list as before, or save named MoonBoard installations for later use.",
         "saved.heading": "Saved MoonBoard installations",
         "saved.description": "Several Mini or Standard MoonBoards can be stored on the same CRUX wall, including more than one installation of the same setup.",
@@ -76,6 +77,7 @@ TRANSLATIONS = {
     "de": {
         "page.title": "Virtuelle MoonBoard-Zuordnung",
         "page.heading": "Virtuelle MoonBoard-Zuordnung",
+        "page.led_layout": "LEDs · getrennte Raster und Zuordnung",
         "page.description": "Berechne wie bisher eine temporäre LED-Liste oder speichere benannte MoonBoard-Installationen zur späteren Verwendung.",
         "saved.heading": "Gespeicherte MoonBoard-Installationen",
         "saved.description": "An derselben CRUX-Wand können mehrere Mini- oder Standard-MoonBoards gespeichert werden – auch mehrere Installationen desselben Setups.",
@@ -154,9 +156,12 @@ def return_virtual_mapping_html(
     path_prefix="",
     saved_mappings=None,
     moonboard_setups=None,
+    recalculate_on_load=False,
 ):
     replacements = {
         "__WALL_ID__": json.dumps(wall["id"]),
+        "__RECALCULATE__": json.dumps(recalculate_on_load),
+        "__LED_EDIT_URL__": f"{path_prefix}/ledmapping?id={wall['id']}",
         "__WALL_NAME__": escape(str(wall.get("name") or "")),
         "__WALL_IMAGE_WIDTH__": json.dumps(wall.get("image_width")),
         "__WALL_IMAGE_HEIGHT__": json.dumps(wall.get("image_height")),
@@ -228,6 +233,7 @@ def return_virtual_mapping_html(
         <h1 data-i18n="page.heading">Virtual MoonBoard mapping</h1>
         <p><strong>__WALL_NAME__</strong></p>
         <p><a href="__WALL_EDIT_URL__" data-i18n="page.add_holes">Edit wall grid / add individual holes</a></p>
+        <p><a href="__LED_EDIT_URL__" data-i18n="page.led_layout">Independent LED grids and associations</a></p>
         <p class="intro" data-i18n="page.description">Calculate a temporary LED list as before, or save named MoonBoard installations for later use.</p>
 
         <section class="panel" id="saved-mappings-panel">
@@ -349,6 +355,7 @@ def return_virtual_mapping_html(
         let physicalIds = [];
         let previewActive = false;
         let previewRequestPending = false;
+        let mappingRevision = 0;
         let statusState = { key: 'status.points', replacements: { count: 0 }, error: false };
 
         function t(key, replacements = {}) { return window.cruxI18n.t(key, replacements); }
@@ -430,10 +437,12 @@ def return_virtual_mapping_html(
             matches = [];
         }
         async function clearResult() {
+            const revision = ++mappingRevision;
             if (previewActive) {
                 const restored = await setPreview(false, true);
                 if (!restored) return false;
             }
+            if (revision !== mappingRevision) return false;
             removeMappingMarkers();
             physicalIds = [];
             output.value = '';
@@ -476,7 +485,7 @@ def return_virtual_mapping_html(
                 virtual.className = 'virtual-point';
                 virtual.style.left = `${virtualDisplay.x}px`;
                 virtual.style.top = `${virtualDisplay.y}px`;
-                virtual.textContent = match.physical_led_ids.join('/');
+                virtual.textContent = match.physical_led_ids.join('/') || '—';
                 const moonboardPosition = match.moonboard_hold_label || `#${match.virtual_position_id}`;
                 virtual.title = `${moonboardPosition}: ${match.physical_led_ids.join(', ')} (Wall LED ${match.logical_led_id})`;
                 imageContainer.appendChild(virtual);
@@ -522,7 +531,10 @@ def return_virtual_mapping_html(
         function showMappingResult(mapping) {
             matches = mapping.matches || [];
             physicalIds = mapping.physical_led_ids || [];
-            output.value = physicalIds.join(', ');
+            // Retain empty positions in exports; never shift later MoonBoard IDs.
+            output.value = matches.some(match => 'below_status' in match)
+                ? matches.map(match => match.physical_led_ids.join('/')).join(', ')
+                : physicalIds.join(', ');
             resultSection.hidden = false;
             renderMatches();
             renderPreviewButton();
@@ -547,7 +559,8 @@ def return_virtual_mapping_html(
             };
         }
         async function loadSavedMapping(mapping, statusKey = 'status.loaded') {
-            if (!await clearResult()) return;
+            const revision = mappingRevision + 1;
+            if (!await clearResult() || revision !== mappingRevision) return;
             selectedMappingId = mapping.id;
             savedMappingSelect.value = mapping.id;
             mappingNameInput.value = mapping.name;
@@ -563,10 +576,28 @@ def return_virtual_mapping_html(
             ledDirection.value = stored.led_direction || 'vertical';
             const scaled = scaleSavedMapping(stored);
             points = scaled.points;
-            showMappingResult({
-                matches: scaled.matches,
-                physical_led_ids: stored.physical_led_ids || [],
-            });
+            if (__RECALCULATE__) {
+                // Old snapshots remain stored, but previews use the active LED layer.
+                setStatus('status.calculating');
+                try {
+                    const response = await fetch('__CALCULATE_URL__', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(buildPayload()),
+                    });
+                    const data = await response.json();
+                    if (revision !== mappingRevision) return;
+                    if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+                    showMappingResult(data);
+                } catch (error) {
+                    if (revision !== mappingRevision) return;
+                    removeMappingMarkers(); output.value = ''; physicalIds = [];
+                    renderPreviewButton();
+                    setStatus('status.error', { message: error.message }, true);
+                    return;
+                }
+            } else {
+                showMappingResult({matches: scaled.matches, physical_led_ids: stored.physical_led_ids || []});
+            }
             renderCorners();
             renderSavedMappingSelect();
             setStatus(statusKey, { name: mapping.name });
@@ -662,6 +693,7 @@ def return_virtual_mapping_html(
             if (!validateGrid()) return;
             if (previewActive && !await setPreview(false, true)) return;
             const payload = buildPayload();
+            const revision = ++mappingRevision;
             setStatus('status.calculating');
             calculateButton.disabled = true;
             try {
@@ -671,11 +703,13 @@ def return_virtual_mapping_html(
                     body: JSON.stringify(payload),
                 });
                 const data = await response.json();
+                if (revision !== mappingRevision) return;
                 if (!response.ok) throw new Error(data.detail || data.message || `HTTP ${response.status}`);
                 showMappingResult(data);
                 const duplicates = physicalIds.length - new Set(physicalIds).size;
                 setStatus('status.mapped', { virtual: matches.length, physical: physicalIds.length, duplicates });
             } catch (error) {
+                if (revision !== mappingRevision) return;
                 await clearResult();
                 setStatus('status.error', { message: error.message }, true);
             } finally {

@@ -15,10 +15,12 @@ from uuid import uuid4
 from fastapi import FastAPI, HTTPException, Request, logger
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, HttpUrl
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 import json
 from utils import (
     CELEBRATION_EFFECTS,
+    PhysicalLED,
+    _wled_controllers,
     generate_grid,
     generate_grid_position_layout,
     grid_led_assignments,
@@ -46,6 +48,8 @@ from templates.settings import return_settings_html
 from templates.status import return_status_html
 from templates.virtual_mapping import return_virtual_mapping_html
 from config_loader import config
+from led_layout import LEDLayout, active_associations, calculate_layout, physical_route, seed_layout
+from templates.led_mapping import return_led_mapping_html
 Base = declarative_base()
 # SQLAlchemy Model for Wall
 class Hold2ledDB(Base):
@@ -875,6 +879,12 @@ class VirtualMappingPreviewRequest(BaseModel):
     enabled: bool = True
 
 
+class LEDLayoutRequest(BaseModel):
+    wallid: int
+    action: Literal["calculate", "draft", "activate", "deactivate"] = "calculate"
+    layout: LEDLayout | None = None
+
+
 class Climb(BaseModel):
     id: int
     wall_id: int
@@ -979,13 +989,15 @@ async def viewed(payload: PayL, request: Request):
         saved_creation = db.query(WallCreationDB).filter(
             WallCreationDB.wallid == climb.wall_id
         ).first()
-        holds = apply_hold_lighting_direction(
-            holds,
-            saved_creation.settings if saved_creation else None,
-            hold_lighting_direction,
-        )
-        assignments = grid_led_assignments(saved_creation.settings if saved_creation else None)
-        holds = {assignments.get(led_id, led_id): hold_type for led_id, hold_type in holds.items()}
+        settings = saved_creation.settings if saved_creation else None
+        spatial = active_associations(settings)
+        if spatial is not None:
+            holds = {PhysicalLED(led): value for led, value in
+                     physical_route(holds, spatial, hold_lighting_direction).items()}
+        else:
+            holds = apply_hold_lighting_direction(holds, settings, hold_lighting_direction)
+            assignments = grid_led_assignments(settings)
+            holds = {assignments.get(led_id, led_id): value for led_id, value in holds.items()}
         async with _lighting_state_lock:
             if _celebration_active:
                 # Keep the running celebration untouched. If several viewed
@@ -1404,6 +1416,7 @@ def _calculate_virtual_mapping_payload(payload):
             config.hole2LEDS,
             target_width=wall_width,
             target_height=wall_height,
+            direction=hold_lighting_direction,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1455,6 +1468,7 @@ async def virtual_mapping(id: str = ""):
             "image_height": wall.image_height,
         }
         saved_mappings = _saved_moonboard_mappings(db, wall_id)
+        independent_leds = bool(saved_creation.settings.get("led_layout"))
     finally:
         db.close()
 
@@ -1463,7 +1477,73 @@ async def virtual_mapping(id: str = ""):
         APP_PATH_PREFIX,
         saved_mappings,
         MOONBOARD_SETUPS,
+        recalculate_on_load=independent_leds,
     ))
+
+
+@app.get("/ledmapping", response_class=HTMLResponse)
+async def led_mapping_editor(id: int):
+    db = SessionLocal()
+    try:
+        wall = db.query(WallDB).filter(WallDB.id == id).first()
+        saved = db.query(WallCreationDB).filter(WallCreationDB.wallid == id).first()
+        if wall is None or saved is None:
+            raise HTTPException(status_code=404, detail="Create and save the grip grids first")
+        settings = saved.settings
+        draft = settings.get("led_layout_draft") or settings.get("led_layout")
+        if not draft:
+            draft = seed_layout(settings, config.hole2LEDS, wall.image_width, wall.image_height)
+        data = {"wallid": id, "layout": draft, "active": bool(settings.get("led_layout")),
+                "grip_grids": settings.get("grids") or [settings],
+                "coordinate_width": settings.get("coordinate_width") or wall.image_width,
+                "coordinate_height": settings.get("coordinate_height") or wall.image_height}
+        return HTMLResponse(return_led_mapping_html(data, wall.image_url, APP_PATH_PREFIX))
+    finally:
+        db.close()
+
+
+@app.post("/ledmapping")
+async def edit_led_mapping(payload: LEDLayoutRequest):
+    db = SessionLocal()
+    try:
+        saved = db.query(WallCreationDB).filter(WallCreationDB.wallid == payload.wallid).first()
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Create and save the grip grids first")
+        settings = copy.deepcopy(saved.settings)
+        if payload.action == "deactivate":
+            settings.pop("led_layout", None)
+            saved.settings = settings
+            db.commit()
+            return {"active": False}
+        if payload.layout is None:
+            raise HTTPException(status_code=400, detail="LED layout is required")
+        layout = payload.layout.model_dump(exclude_unset=True)
+        try:
+            result = calculate_layout(settings, layout)
+            controllers = _wled_controllers()
+            result["unconfigured_led_ids"] = [p["physical_id"] for p in result["leds"]
+                if p["physical_id"] is not None and not any(
+                    c["start"] <= p["physical_id"] <= c["end"] for c in controllers)]
+            if payload.action == "activate":
+                if not any(p["physical_id"] is not None for p in result["leds"]):
+                    raise ValueError("At least one visible LED is required")
+                if not any(p["above"] is not None or p["below"] is not None for p in result["grips"]):
+                    raise ValueError("No grip is associated with an LED; align the LED points and wall surfaces first")
+                if result["unconfigured_led_ids"]:
+                    raise ValueError(f"LED IDs outside configured controllers: {result['unconfigured_led_ids'][:20]}")
+                if any(p[f"{side}_status"] == "ambiguous" for p in result["grips"] for side in ("above", "below")):
+                    raise ValueError("Resolve ambiguous associations before activating")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if payload.action in ("draft", "activate"):
+            settings["led_layout_draft"] = layout
+            if payload.action == "activate":
+                settings["led_layout"] = copy.deepcopy(layout)
+            saved.settings = settings
+            db.commit()
+        return {**result, "active": bool(settings.get("led_layout"))}
+    finally:
+        db.close()
 
 
 @app.post("/virtualmapping/calculate")
@@ -1942,6 +2022,17 @@ async def define_holds(payload: Union[WallTranslation, MultiGridWallTranslation]
         WallCreationDB.wallid == payload.wallid
     ).first()
     if saved_creation:
+        # Grip edits do not discard the independent LED layer or its draft.
+        # Deleted grips/grids lose only their obsolete overrides/group labels.
+        from led_layout import grip_positions, grid_identity
+        known_keys = {p["key"] for p in grip_positions(saved_settings)}
+        known_grids = {grid_identity(g, i) for i, g in enumerate(saved_grids)}
+        for key in ("led_layout", "led_layout_draft"):
+            if saved_creation.settings.get(key):
+                layout = copy.deepcopy(saved_creation.settings[key])
+                layout["overrides"] = {k: v for k, v in layout.get("overrides", {}).items() if k in known_keys}
+                layout["grip_surfaces"] = {k: v for k, v in layout.get("grip_surfaces", {}).items() if k in known_grids}
+                saved_settings[key] = layout
         saved_creation.settings = saved_settings
     else:
         db.add(WallCreationDB(wallid=payload.wallid, settings=saved_settings))

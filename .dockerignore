@@ -1,6 +1,7 @@
 .git/
 .venv/
 .cache/
+.codex-remote-attachments/
 .pytest_cache/
 .ruff_cache/
 .vscode/

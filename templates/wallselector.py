@@ -9,6 +9,8 @@ TRANSLATIONS = {
         "page.title": "Climbing wall – select points",
         "page.heading": "Climbing wall – select points",
         "page.virtual_mapping": "Open virtual MoonBoard mapping",
+        "page.led_layout": "LEDs · independent grids and associations",
+        "page.independent_active": "Independent LED mapping is active. Points and numbers here identify grips; configure physical LEDs in the separate LED editor. Legacy row calibration is inactive.",
         "tabs.add": "Add grid",
         "tabs.grid": "Grid {number}",
         "tabs.range": "LED {start}–{end}",
@@ -77,6 +79,8 @@ TRANSLATIONS = {
         "page.title": "Kletterwand – Punkte auswählen",
         "page.heading": "Kletterwand – Punkte auswählen",
         "page.virtual_mapping": "Virtuelle MoonBoard-Zuordnung öffnen",
+        "page.led_layout": "LEDs · getrennte Raster und Zuordnung",
+        "page.independent_active": "Die getrennte LED-Zuordnung ist aktiv. Punkte und Nummern hier bezeichnen Grifflöcher; physische LEDs bearbeitest du im separaten LED-Editor. Die bisherige Zeilenkorrektur ist inaktiv.",
         "tabs.add": "Raster hinzufügen",
         "tabs.grid": "Raster {number}",
         "tabs.range": "LED {start}–{end}",
@@ -152,6 +156,9 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         "__WALL_ID__": str(wall["id"]),
         "__PATH_PREFIX__": path_prefix,
         "__VIRTUAL_MAPPING_URL__": f"{path_prefix}/virtualmapping?id={wall['id']}",
+        "__LED_EDIT_URL__": f"{path_prefix}/ledmapping?id={wall['id']}",
+        "__INDEPENDENT_NOTICE__": '<p role="status" data-i18n="page.independent_active"></p>' if (saved_creation or {}).get("led_layout") else '',
+        "__LEGACY_STYLE__": 'style="display:none"' if (saved_creation or {}).get("led_layout") else '',
         "__IMAGE_URL__": escape(str(wall["image_url"]), quote=True),
         "__LANGUAGE_SWITCH__": language_switch_html(TRANSLATIONS),
     }
@@ -206,6 +213,8 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
 <body>
     <h1 data-i18n="page.heading">Climbing wall – select points</h1>
     <a class="secondary-link" href="__VIRTUAL_MAPPING_URL__" data-i18n="page.virtual_mapping">Open virtual MoonBoard mapping</a>
+    <a class="secondary-link" href="__LED_EDIT_URL__" data-i18n="page.led_layout">LEDs · independent grids and associations</a>
+    __INDEPENDENT_NOTICE__
     <a class="secondary-link" href="#manual-controls" data-i18n="manual.add">Add individual holes</a>
     <div id="grid-tabs" role="tablist" aria-label="Grids"></div>
     <div>
@@ -245,7 +254,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <p data-i18n="help.numbering">The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.</p>
     <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
     <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save all grids</b>.</p>
-    <div class="form-row">
+    <div class="form-row" __LEGACY_STYLE__>
         <label for="led-row-offset" data-i18n="form.led_row">LED assignment for this grid:</label>
         <select id="led-row-offset">
             <option value="0" data-i18n="form.led_row_same">Unchanged</option>
@@ -253,7 +262,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             <option value="-1" data-i18n="form.led_row_above">One grid row above</option>
         </select>
     </div>
-    <p data-i18n="help.led_row">The points mark grip holes. If their LEDs belong to an adjacent row, select it here. Staggered rows use the same position counted from the left. Missing positions and individual extra holes keep their original assignment.</p>
+    <p data-i18n="help.led_row" __LEGACY_STYLE__>The points mark grip holes. If their LEDs belong to an adjacent row, select it here. Staggered rows use the same position counted from the left. Missing positions and individual extra holes keep their original assignment.</p>
     <section id="manual-controls" aria-labelledby="manual-heading">
         <h2 id="manual-heading" data-i18n="manual.heading">Individual holes</h2>
         <button id="add-hole-mode" type="button" aria-pressed="false" aria-describedby="manual-status" disabled>Add individual holes</button>

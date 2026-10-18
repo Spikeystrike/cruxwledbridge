@@ -8,6 +8,7 @@ __pycache__/
 .vscode/
 .venv/
 .cache/
+.codex-remote-attachments/
 .pytest_cache/
 .ruff_cache/
 db/

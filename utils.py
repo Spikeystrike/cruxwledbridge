@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -29,6 +30,12 @@ class LightingResult(dict):
     def __init__(self, values, operation):
         super().__init__(values)
         self.operation = operation
+
+
+@dataclass(frozen=True)
+class PhysicalLED:
+    """An already resolved address; must never pass through hole2LEDS again."""
+    id: int
 
 
 def _utc_now():
@@ -527,6 +534,7 @@ def map_virtual_grid_to_physical_leds(
     hole2leds,
     target_width=None,
     target_height=None,
+    direction="below",
 ):
     """Match virtual cable-order positions to physical LEDs across all grids."""
     if not isinstance(saved_settings, dict):
@@ -587,6 +595,8 @@ def map_virtual_grid_to_physical_leds(
         raise ValueError("The virtual grid has no positions")
 
     led_assignments = grid_led_assignments(saved_settings)
+    from led_layout import active_associations
+    spatial = active_associations(saved_settings)
     hold_ids_by_logical_led = {}
     saved_holds2led = saved_settings.get("holds2led", {})
     if isinstance(saved_holds2led, dict):
@@ -620,12 +630,20 @@ def map_virtual_grid_to_physical_leds(
             ),
         )
         assigned_led_id = led_assignments.get(logical_led_id, logical_led_id)
-        physical_led_ids = hole2leds.get(assigned_led_id)
-        if physical_led_ids is None:
-            physical_led_ids = hole2leds.get(str(assigned_led_id))
+        if spatial is not None:
+            association = spatial.get(logical_led_id, {})
+            sides = ("below", "above") if direction == "both" else (direction,)
+            physical_led_ids = list(dict.fromkeys(
+                association[side] for side in sides if association.get(side) is not None
+            ))
+            assigned_led_id = None
+        else:
+            physical_led_ids = hole2leds.get(assigned_led_id)
+            if physical_led_ids is None:
+                physical_led_ids = hole2leds.get(str(assigned_led_id))
         if isinstance(physical_led_ids, int):
             physical_led_ids = [physical_led_ids]
-        if not isinstance(physical_led_ids, (list, tuple)) or not physical_led_ids:
+        if not isinstance(physical_led_ids, (list, tuple)) or (not physical_led_ids and spatial is None):
             raise ValueError(
                 f"Logical LED {assigned_led_id} has no physical hole2LEDS mapping"
             )
@@ -646,6 +664,11 @@ def map_virtual_grid_to_physical_leds(
             "assigned_led_id": assigned_led_id,
             "crux_hold_ids": hold_ids_by_logical_led.get(logical_led_id, []),
             "physical_led_ids": physical_led_ids,
+            **({"below_physical_led_id": association.get("below"),
+                "above_physical_led_id": association.get("above"),
+                "below_status": association.get("below_status", "missing"),
+                "above_status": association.get("above_status", "missing")}
+               if spatial is not None else {}),
             "source_x": round(source_x),
             "source_y": round(source_y),
             "distance": distance,
@@ -815,7 +838,8 @@ def sendLightToBoulderwall(
         else:
             hold_type = hold_value
             brightness_percent = boulder_brightness_percent
-        for physical_led_id in hole2LEDS[hole_id]:
+        physical_ids = [hole_id.id] if isinstance(hole_id, PhysicalLED) else hole2LEDS[hole_id]
+        for physical_led_id in physical_ids:
             led[physical_led_id] = _scale_hex_color(
                 colors[hold_type],
                 brightness_percent,
