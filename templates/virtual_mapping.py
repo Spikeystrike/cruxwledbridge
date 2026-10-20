@@ -8,7 +8,7 @@ TRANSLATIONS = {
     "en": {
         "page.title": "Virtual MoonBoard mapping",
         "page.heading": "Virtual MoonBoard mapping",
-        "page.led_layout": "LEDs · independent grids and associations",
+        "page.led_layout": "Set up grips, LEDs and cable order",
         "page.description": "Calculate a temporary LED list as before, or save named MoonBoard installations for later use.",
         "saved.heading": "Saved MoonBoard installations",
         "saved.description": "Several Mini or Standard MoonBoards can be stored on the same CRUX wall, including more than one installation of the same setup.",
@@ -77,7 +77,7 @@ TRANSLATIONS = {
     "de": {
         "page.title": "Virtuelle MoonBoard-Zuordnung",
         "page.heading": "Virtuelle MoonBoard-Zuordnung",
-        "page.led_layout": "LEDs · getrennte Raster und Zuordnung",
+        "page.led_layout": "Griffe, LEDs und Kabelreihenfolge einrichten",
         "page.description": "Berechne wie bisher eine temporäre LED-Liste oder speichere benannte MoonBoard-Installationen zur späteren Verwendung.",
         "saved.heading": "Gespeicherte MoonBoard-Installationen",
         "saved.description": "An derselben CRUX-Wand können mehrere Mini- oder Standard-MoonBoards gespeichert werden – auch mehrere Installationen desselben Setups.",

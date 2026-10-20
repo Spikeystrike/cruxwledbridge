@@ -1192,8 +1192,9 @@ class WallEndpointTests(unittest.TestCase):
             html = result.body.decode()
             self.assertIn('"coordinate_width":200', html)
             self.assertIn('"coordinate_height":400', html)
-            self.assertIn("const wallImageWidth = 400", html)
-            self.assertIn("const wallImageHeight = 800", html)
+            self.assertIn('"image_width":400', html)
+            self.assertIn('"image_height":800', html)
+            self.assertIn('id="grip-frame"', html)
 
             db = main.SessionLocal()
             saved = db.query(main.WallCreationDB).filter(

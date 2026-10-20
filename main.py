@@ -48,7 +48,7 @@ from templates.settings import return_settings_html
 from templates.status import return_status_html
 from templates.virtual_mapping import return_virtual_mapping_html
 from config_loader import config
-from led_layout import LEDLayout, active_associations, calculate_layout, physical_route, seed_layout
+from led_layout import LEDLayout, active_associations, calculate_layout, physical_route, seed_layout, derive_led_grid, grip_positions
 from templates.led_mapping import return_led_mapping_html
 Base = declarative_base()
 # SQLAlchemy Model for Wall
@@ -885,6 +885,13 @@ class LEDLayoutRequest(BaseModel):
     layout: LEDLayout | None = None
 
 
+class DeriveLEDRequest(BaseModel):
+    wallid: int
+    grid_id: str
+    mode: Literal["copy", "below", "alternate"] = "copy"
+    offset_rows: float = Field(default=0.5, ge=0, le=10, allow_inf_nan=False)
+
+
 class Climb(BaseModel):
     id: int
     wall_id: int
@@ -1481,23 +1488,69 @@ async def virtual_mapping(id: str = ""):
     ))
 
 
-@app.get("/ledmapping", response_class=HTMLResponse)
-async def led_mapping_editor(id: int):
+def _led_editor_context(id):
     db = SessionLocal()
     try:
         wall = db.query(WallDB).filter(WallDB.id == id).first()
         saved = db.query(WallCreationDB).filter(WallCreationDB.wallid == id).first()
-        if wall is None or saved is None:
-            raise HTTPException(status_code=404, detail="Create and save the grip grids first")
-        settings = saved.settings
+        if wall is None:
+            raise HTTPException(status_code=404, detail="Load the wall from CRUX first")
+        settings = saved.settings if saved else {}
         draft = settings.get("led_layout_draft") or settings.get("led_layout")
         if not draft:
-            draft = seed_layout(settings, config.hole2LEDS, wall.image_width, wall.image_height)
+            complete = settings and all(g.get("r") and g.get("c") and len(g.get("points", [])) == 4
+                                        for g in (settings.get("grids") or [settings]))
+            draft = seed_layout(settings, config.hole2LEDS, wall.image_width, wall.image_height) if complete else {
+                "coordinate_width": wall.image_width, "coordinate_height": wall.image_height, "grids": []}
         data = {"wallid": id, "layout": draft, "active": bool(settings.get("led_layout")),
-                "grip_grids": settings.get("grids") or [settings],
+                "grip_grids": (settings.get("grids") or [settings]) if settings else [],
                 "coordinate_width": settings.get("coordinate_width") or wall.image_width,
-                "coordinate_height": settings.get("coordinate_height") or wall.image_height}
-        return HTMLResponse(return_led_mapping_html(data, wall.image_url, APP_PATH_PREFIX))
+                "coordinate_height": settings.get("coordinate_height") or wall.image_height,
+                "image_width": wall.image_width, "image_height": wall.image_height}
+        data["grip_keys"] = [p["key"] for p in grip_positions(settings)] if settings and all(
+            g.get("r") and g.get("c") for g in (settings.get("grids") or [settings])) else []
+        return data, wall.image_url
+    finally:
+        db.close()
+
+
+@app.get("/ledmapping", response_class=HTMLResponse)
+async def led_mapping_editor(id: int):
+    data, image_url = _led_editor_context(id)
+    return HTMLResponse(return_led_mapping_html(data, image_url, APP_PATH_PREFIX))
+
+
+@app.get("/ledmapping/data")
+async def led_mapping_data(wallid: int):
+    return _led_editor_context(wallid)[0]
+
+
+@app.get("/ledmapping/grips", response_class=HTMLResponse)
+async def grip_geometry_editor(wallid: int):
+    data, image_url = _led_editor_context(wallid)
+    db = SessionLocal()
+    try:
+        saved = db.query(WallCreationDB).filter_by(wallid=wallid).first()
+        wall = {"id": wallid, "image_url": image_url, "image_width": data["image_width"],
+                "image_height": data["image_height"]}
+        return HTMLResponse(returnwallhtml(wall, APP_PATH_PREFIX, saved.settings if saved else None, grip_only=True))
+    finally:
+        db.close()
+
+
+@app.post("/ledmapping/derive")
+async def derive_led_positions(payload: DeriveLEDRequest):
+    db = SessionLocal()
+    try:
+        saved = db.query(WallCreationDB).filter_by(wallid=payload.wallid).first()
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Save grip positions first")
+        try:
+            grid = derive_led_grid(saved.settings, payload.grid_id, payload.mode, payload.offset_rows)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"grid": grid, "coordinate_width": saved.settings.get("coordinate_width"),
+                "coordinate_height": saved.settings.get("coordinate_height")}
     finally:
         db.close()
 
@@ -1525,6 +1578,8 @@ async def edit_led_mapping(payload: LEDLayoutRequest):
                 if p["physical_id"] is not None and not any(
                     c["start"] <= p["physical_id"] <= c["end"] for c in controllers)]
             if payload.action == "activate":
+                if result["unwired_count"]:
+                    raise ValueError("Finish the cable path before activating; visible LEDs are still unassigned")
                 if not any(p["physical_id"] is not None for p in result["leds"]):
                     raise ValueError("At least one visible LED is required")
                 if not any(p["above"] is not None or p["below"] is not None for p in result["grips"]):
@@ -1810,7 +1865,8 @@ async def wall_creation(id: str = ""):
 
         db.commit()  # Save changes to the database
         db.close()
-        html_content = returnwallhtml(wall, APP_PATH_PREFIX, saved_settings)
+        data, image_url = _led_editor_context(wall['id'])
+        html_content = return_led_mapping_html(data, image_url, APP_PATH_PREFIX)
         return HTMLResponse(content=html_content)        
     else:
         raise HTTPException(status_code=400, detail="Please send a wall id")

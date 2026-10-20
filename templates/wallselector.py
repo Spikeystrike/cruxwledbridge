@@ -1,5 +1,6 @@
 import json
 from html import escape
+from pathlib import Path
 
 from templates.language import language_switch_html
 
@@ -9,7 +10,7 @@ TRANSLATIONS = {
         "page.title": "Climbing wall – select points",
         "page.heading": "Climbing wall – select points",
         "page.virtual_mapping": "Open virtual MoonBoard mapping",
-        "page.led_layout": "LEDs · independent grids and associations",
+        "page.led_layout": "Set up grips, LEDs and cable order",
         "page.independent_active": "Independent LED mapping is active. Points and numbers here identify grips; configure physical LEDs in the separate LED editor. Legacy row calibration is inactive.",
         "tabs.add": "Add grid",
         "tabs.grid": "Grid {number}",
@@ -79,7 +80,7 @@ TRANSLATIONS = {
         "page.title": "Kletterwand – Punkte auswählen",
         "page.heading": "Kletterwand – Punkte auswählen",
         "page.virtual_mapping": "Virtuelle MoonBoard-Zuordnung öffnen",
-        "page.led_layout": "LEDs · getrennte Raster und Zuordnung",
+        "page.led_layout": "Griffe, LEDs und Kabelreihenfolge einrichten",
         "page.independent_active": "Die getrennte LED-Zuordnung ist aktiv. Punkte und Nummern hier bezeichnen Grifflöcher; physische LEDs bearbeitest du im separaten LED-Editor. Die bisherige Zeilenkorrektur ist inaktiv.",
         "tabs.add": "Raster hinzufügen",
         "tabs.grid": "Raster {number}",
@@ -148,7 +149,14 @@ TRANSLATIONS = {
 }
 
 
-def returnwallhtml(wall, path_prefix="", saved_creation=None):
+def returnwallhtml(wall, path_prefix="", saved_creation=None, grip_only=False):
+    translations = {lang: dict(values) for lang, values in TRANSLATIONS.items()}
+    if grip_only:
+        for lang, label in (("de", "Griff"), ("en", "Grip")):
+            translations[lang] = {key: value.replace("LED", label) for key, value in translations[lang].items()}
+            translations[lang]["page.heading"] = "1 · Griffpositionen" if lang == "de" else "1 · Grip positions"
+            translations[lang]["manual.help"] = ("Zusätzliche Grifflöcher durch Anklicken ihrer Mitte im Wandbild ergänzen. Anschließend alle Raster speichern."
+                                                   if lang == "de" else "Add extra grip holes by clicking their centres in the wall image. Then save all grids.")
     replacements = {
         "__SAVED_CREATION__": json.dumps(saved_creation or {}, separators=(",", ":")),
         "__WALL_IMAGE_WIDTH__": json.dumps(wall.get("image_width")),
@@ -160,7 +168,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         "__INDEPENDENT_NOTICE__": '<p role="status" data-i18n="page.independent_active"></p>' if (saved_creation or {}).get("led_layout") else '',
         "__LEGACY_STYLE__": 'style="display:none"' if (saved_creation or {}).get("led_layout") else '',
         "__IMAGE_URL__": escape(str(wall["image_url"]), quote=True),
-        "__LANGUAGE_SWITCH__": language_switch_html(TRANSLATIONS),
+        "__LANGUAGE_SWITCH__": language_switch_html(translations),
+        "__GRIP_ONLY__": json.dumps(grip_only),
+        "__GRIP_CSS__": '.secondary-link, #grip-cable-controls, [data-i18n="help.numbering"], [data-i18n="help.led_row"], #legacy-calibration, [data-i18n="manual.order"], #manual-insert-before, .manual-row select {display:none !important;}' if grip_only else '',
+        "__ZOOM_SCRIPT__": (Path(__file__).parent / "image_zoom.js").read_text(encoding="utf-8"),
     }
     html_content = """
 <!DOCTYPE html>
@@ -170,6 +181,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title data-i18n="page.title">Climbing wall – select points</title>
     <style>
+        __GRIP_CSS__
+        #grip-viewport {overflow:auto;max-height:75vh;width:100%;touch-action:none;}
+        #grip-viewport #image-container {max-width:none;}
+        #grip-viewport #climbing-image {width:100%;max-width:none;}
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f0f0; margin: 20px; }
         h1 { color: #333; }
         .secondary-link { display: inline-block; margin-bottom: 16px; color: #0056b3; }
@@ -236,7 +251,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             <label for="auto-exclude-empty"><input type="checkbox" id="auto-exclude-empty" checked><span data-i18n="form.auto_exclude_empty">Automatically disable positions without a nearby hold</span></label>
         </div>
         <div class="form-row">
-            <label for="led-start-corner" data-i18n="form.led_zero">LED start:</label>
+            <label id="grip-cable-controls" for="led-start-corner" data-i18n="form.led_zero">LED start:</label>
             <select id="led-start-corner">
                 <option value="top_left" data-i18n="form.top_left">Top left</option>
                 <option value="top_right" data-i18n="form.top_right">Top right</option>
@@ -254,7 +269,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     <p data-i18n="help.numbering">The first grid starts at LED 0. Every following grid continues after the previous tab; drag the tabs to change that order.</p>
     <p><span data-i18n="help.corners">Click the 4 corner points in this order:</span> <b data-i18n="help.corner_order">Top left, top right, bottom right, bottom left</b>.</p>
     <p><span data-i18n="help.selection">After calculating, click grid points to disable or reactivate them. Then click</span> <b data-i18n="help.save_selection">Save all grids</b>.</p>
-    <div class="form-row" __LEGACY_STYLE__>
+    <div id="legacy-calibration" class="form-row" __LEGACY_STYLE__>
         <label for="led-row-offset" data-i18n="form.led_row">LED assignment for this grid:</label>
         <select id="led-row-offset">
             <option value="0" data-i18n="form.led_row_same">Unchanged</option>
@@ -272,7 +287,8 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         <select id="manual-insert-before" disabled></select>
         <div id="manual-list"></div>
     </section>
-    <div id="image-container"><img id="climbing-image" src="__IMAGE_URL__" alt="Climbing wall" data-i18n-alt="image.alt"></div>
+    <div class="form-row"><button id="grip-zoom-out" aria-label="Zoom out">−</button><button id="grip-zoom-fit">100%</button><button id="grip-zoom-in" aria-label="Zoom in">+</button></div>
+    <div id="grip-viewport"><div id="image-container"><img id="climbing-image" src="__IMAGE_URL__" alt="Climbing wall" data-i18n-alt="image.alt"></div></div>
     <div id="status">Points: 0 / 4</div>
     <div id="action-buttons">
         <button id="reset-btn" type="button" data-i18n="button.reset">Reset grid</button>
@@ -280,6 +296,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
     </div>
     __LANGUAGE_SWITCH__
     <script>
+        __ZOOM_SCRIPT__
         const imageContainer = document.getElementById('image-container');
         const climbingImage = document.getElementById('climbing-image');
         const submitBtn = document.getElementById('submit-btn');
@@ -300,6 +317,7 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         const manualInsertBefore = document.getElementById('manual-insert-before');
         const manualList = document.getElementById('manual-list');
         const savedCreation = __SAVED_CREATION__;
+        if (__GRIP_ONLY__) document.getElementById('grip-cable-controls').parentElement.style.display = 'none';
         const wallImageWidth = __WALL_IMAGE_WIDTH__;
         const wallImageHeight = __WALL_IMAGE_HEIGHT__;
         let renderedHolds2led = savedCreation.holds2led || {};
@@ -613,6 +631,15 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
             selectionDirty = true; captureActiveGrid(); updateGridStatus();
         });
         function redraw() { updateUI(); renderGrid(); updateGridStatus(); renderManualControls(); }
+        let savedGripFingerprint = null;
+        function gripFingerprint() {
+            captureActiveGrid();
+            return JSON.stringify(grids.map(g => ({id:g.id,points:g.points,r:g.r,c:g.c,
+                alternating:g.alternating,alternating_start_column:g.alternating_start_column,
+                excluded_position_ids:g.excluded_position_ids,manual_positions:g.manual_positions,
+                auto_exclude_empty:g.auto_exclude_empty})));
+        }
+        window.cruxGripUnsaved = () => savedGripFingerprint !== null && gripFingerprint() !== savedGripFingerprint;
         window.addEventListener('resize', redraw);
         if ('ResizeObserver' in window) new ResizeObserver(() => { if (savedCreationInitialized) redraw(); }).observe(climbingImage);
         window.addEventListener('crux-language-change', () => { renderTabs(); updateSubmitButtonLabel(); redraw(); });
@@ -655,7 +682,10 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
                 bindHoldsToPositions();
                 renumberGrids();
                 activeGridIndex = Math.max(0, grids.findIndex((grid) => grid.id === activeId));
-                activeGridLoaded = false; loadGrid(activeGridIndex); alert(t('alert.saved'));
+                activeGridLoaded = false; loadGrid(activeGridIndex);
+                savedGripFingerprint = gripFingerprint();
+                if (__GRIP_ONLY__ && window.parent !== window) window.parent.postMessage({type:'crux-grips-saved'}, window.location.origin);
+                alert(t('alert.saved'));
             } catch (error) {
                 console.error('Could not save wall mapping:', error);
                 alert(t('alert.send_error', { message: error.message }));
@@ -666,7 +696,16 @@ def returnwallhtml(wall, path_prefix="", saved_creation=None):
         });
         function initializeSavedCreation() {
             normalizeSavedCreationCoordinates(); bindHoldsToPositions(); renumberGrids(); activeGridLoaded = false; loadGrid(0); savedCreationInitialized = true;
+            gripZoom.reset();
+            savedGripFingerprint = gripFingerprint();
         }
+        const gripZoom = installImageZoom(document.getElementById('grip-viewport'), imageContainer, {
+            canPan: () => !addingManualHoles && points.length === 4,
+            onChange: () => { updateUI(); renderGrid(); }
+        });
+        document.getElementById('grip-zoom-in').addEventListener('click', () => gripZoom.zoom(1.4));
+        document.getElementById('grip-zoom-out').addEventListener('click', () => gripZoom.zoom(1 / 1.4));
+        document.getElementById('grip-zoom-fit').addEventListener('click', () => gripZoom.reset());
         if (climbingImage.complete && climbingImage.naturalWidth) initializeSavedCreation();
         else climbingImage.addEventListener('load', initializeSavedCreation, { once: true });
     </script>

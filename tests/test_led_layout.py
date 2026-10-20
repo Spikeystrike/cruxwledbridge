@@ -3,6 +3,7 @@ import copy
 import json
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,7 +11,7 @@ from unittest.mock import Mock, patch
 
 from test_utils import config, main, utils
 from led_layout import (LEDLayout, active_associations, calculate_layout, grip_positions,
-                        led_positions, physical_route, seed_layout)
+                        led_positions, physical_route, seed_layout, derive_led_grid)
 from templates.led_mapping import return_led_mapping_html
 
 
@@ -277,7 +278,7 @@ class IndependentLEDUIBehaviorTests(unittest.TestCase):
         self.assertNotIn("__DATA__",html)
         result={**calculate_layout(settings,layout),"active":False,"unconfigured_led_ids":[]}
         completed=subprocess.run([shutil.which("node"),str(Path(__file__).with_name("led_mapping_ui.cjs"))],
-                                 input=json.dumps({"html":html,"result":result}),text=True,capture_output=True,timeout=15)
+                                 input=json.dumps({"html":html,"python":sys.executable}),text=True,capture_output=True,timeout=45)
         self.assertEqual(completed.returncode,0,completed.stdout+completed.stderr)
         self.assertIn("Independent LED UI passed",completed.stdout)
 
@@ -287,3 +288,152 @@ class IndependentLEDUIBehaviorTests(unittest.TestCase):
         self.assertNotIn("</script><b>unsafe",html)
         self.assertIn("unsafe __LANGUAGE__",html)
         self.assertIn("&quot; onerror=&quot;unsafe",html)
+
+class CableWorkflowTests(unittest.TestCase):
+    def fixture(self):
+        layout = layout_fixture()
+        grid = layout['grids'][0]
+        grid['position_start_corner'] = grid['led_start_corner']
+        grid['position_direction'] = grid['led_direction']
+        return layout
+
+    def ref(self, position):
+        return {'grid_id': 'lights', 'position_id': position}
+
+    def test_changing_pattern_keeps_bores_exclusions_and_override_locations(self):
+        layout = self.fixture()
+        original = calculate_layout(settings_fixture(), layout)
+        layout['overrides'] = {'grips:r0c0': {'below': self.ref(3)}}
+        layout['grids'][0].update(led_start_corner='bottom_right', led_direction='vertical', excluded_position_ids=[1, 2])
+        changed = calculate_layout(settings_fixture(), layout)
+        self.assertEqual([(p['position_id'], p['x'], p['y']) for p in original['leds']],
+                         [(p['position_id'], p['x'], p['y']) for p in changed['leds']])
+        self.assertEqual(changed['grips'][0]['below'], changed['leds'][3]['physical_id'])
+        self.assertIsNone(changed['leds'][1]['physical_id'])
+        self.assertIsNone(changed['leds'][2]['physical_id'])
+
+    def test_freezing_legacy_identity_preserves_excluded_stripes_and_extra_anchors(self):
+        for direction in ('horizontal', 'vertical'):
+            for corner in ('top_left', 'top_right', 'bottom_left', 'bottom_right'):
+                layout = layout_fixture()
+                g = layout['grids'][0]
+                g.update(led_start_corner=corner, led_direction=direction,
+                         excluded_position_ids=[2, 3], manual_positions=[{'id': -1, 'x': 130, 'y': 180, 'before_position_id': 2}])
+                before = calculate_layout(settings_fixture(), layout)
+                g.update(position_start_corner=corner, position_direction=direction)
+                after = calculate_layout(settings_fixture(), layout)
+                self.assertEqual(before['cable_order'], after['cable_order'])
+                self.assertEqual(before['leds'], after['leds'])
+
+    def test_subgrids_have_local_patterns_and_remaining_bores_follow(self):
+        layout = self.fixture()
+        layout['grids'][0]['subgrids'] = [
+            {'id': 'left', 'position_ids': [0, 3, 4, 7], 'start_corner': 'bottom_left', 'direction': 'vertical'},
+            {'id': 'right-top', 'position_ids': [1, 2], 'start_corner': 'top_right', 'direction': 'vertical'}]
+        result = calculate_layout(settings_fixture(), layout)
+        self.assertEqual([p['position_id'] for p in result['cable_order']], [7, 4, 3, 0, 1, 2, 5, 6])
+        layout['grids'][0]['subgrids'][1]['position_ids'].append(3)
+        with self.assertRaisesRegex(ValueError, 'non-overlapping'):
+            calculate_layout(settings_fixture(), layout)
+        layout['grids'][0]['subgrids'][1]['position_ids'] = [99]
+        with self.assertRaisesRegex(ValueError, 'no longer exist'):
+            calculate_layout(settings_fixture(), layout)
+
+    def test_manual_path_preserves_partial_geometry_and_rejects_invalid_references(self):
+        layout = self.fixture()
+        layout.update(cable_path=[self.ref(7), self.ref(3)], cable_start=320)
+        layout['overrides'] = {'grips:r0c0': {'above': self.ref(0)}}
+        result = calculate_layout(settings_fixture(), layout)
+        self.assertEqual(result['unwired_count'], 6)
+        self.assertEqual(result['leds'][7]['physical_id'], 320)
+        self.assertEqual(result['grips'][0]['above_status'], 'missing')
+        self.assertEqual(len(result['leds']), 8)
+        for bad in ([self.ref(7), self.ref(7)], [self.ref(99)]):
+            layout['cable_path'] = bad
+            with self.assertRaises(ValueError):
+                calculate_layout(settings_fixture(), layout)
+
+    def test_gaps_keep_explicit_and_numbered_skips_visible_without_double_counting(self):
+        layout = self.fixture()
+        layout.update(cable_path=[self.ref(0), self.ref(1), self.ref(2)], cable_start=100,
+                      skipped_physical_ids=[100, 102, 110, 111],
+                      edge_skips=[{'source': self.ref(0), 'target': self.ref(1), 'count': 2}])
+        result = calculate_layout(settings_fixture(), layout)
+        self.assertEqual([p['physical_id'] for p in result['leds'][:3]], [101, 104, 105])
+        self.assertEqual(result['leading_skipped_ids'], [100])
+        self.assertEqual(result['cable_edges'][0]['skipped_ids'], [102, 103])
+        self.assertEqual(result['unplaced_skipped_ids'], [110, 111])
+        layout['edge_skips'][0]['target'] = self.ref(2)
+        with self.assertRaisesRegex(ValueError, 'adjacent'):
+            calculate_layout(settings_fixture(), layout)
+
+    def test_absolute_skips_and_controller_starts_are_labelled(self):
+        layout = self.fixture()
+        g = copy.deepcopy(layout['grids'][0]); g.update(id='second', physical_start=200)
+        layout['grids'].append(g); layout['skipped_physical_ids'] = [102, 150, 199]
+        result = calculate_layout(settings_fixture(), layout)
+        crossing = next(e for e in result['cable_edges'] if e['source']['grid_id'] != e['target']['grid_id'])
+        self.assertEqual(crossing['skipped_ids'], [150, 199])
+        layout.update(cable_path=result['cable_order'], cable_start=100)
+        manual = calculate_layout(settings_fixture(), layout)
+        self.assertEqual(manual['leds'], result['leds'])
+        self.assertEqual(manual['cable_edges'], result['cable_edges'])
+        g['physical_start'] = 105
+        with self.assertRaisesRegex(ValueError, 'more than once'):
+            calculate_layout(settings_fixture(), layout)
+
+    def test_complementary_staggered_grid_changes_only_geometry_parity(self):
+        settings = settings_fixture()
+        settings['grids'] = [grip_grid(r=8, c=6, alternating=True, alternating_start_column=1)]
+        derived = derive_led_grid(settings, 'grips', 'alternate')
+        self.assertEqual(derived['alternating_start_column'], 0)
+        self.assertEqual(derived['points'], settings['grids'][0]['points'])
+        self.assertEqual(settings['grids'][0]['alternating_start_column'], 1)
+        with self.assertRaisesRegex(ValueError, 'alternating'):
+            derive_led_grid(settings_fixture(), 'grips', 'alternate')
+
+    def test_below_offset_follows_perspective_plane_including_extra_bores(self):
+        import numpy as np
+        settings = settings_fixture()
+        points = [(100,100),(300,150),(350,400),(150,350)]
+        settings['grids'] = [grip_grid(points=points)]
+        settings['grids'][0]['manual_positions'] = [{'id': -1, 'x': 200, 'y': 200}]
+        before = copy.deepcopy(settings)
+        derived = derive_led_grid(settings, 'grips', 'below', .5)
+        inverse = np.linalg.inv(utils._grid_homography(*points))
+        for source, target in zip(before['grids'][0]['points'] + before['grids'][0]['manual_positions'], derived['points'] + derived['manual_positions']):
+            a = inverse @ [source['x'], source['y'], 1]; a /= a[2]
+            b = inverse @ [target['x'], target['y'], 1]; b /= b[2]
+            self.assertAlmostEqual(b[0], a[0])
+            self.assertAlmostEqual(b[1] - a[1], .25)
+        self.assertEqual(settings, before)
+
+
+class CablePersistenceTests(unittest.TestCase):
+    setUp = LEDLayoutPersistenceTests.setUp
+    tearDown = LEDLayoutPersistenceTests.tearDown
+    call = LEDLayoutPersistenceTests.call
+    stored = LEDLayoutPersistenceTests.stored
+    def test_partial_path_can_be_saved_reloaded_and_finished(self):
+        layout = layout_fixture()
+        layout.update(cable_path=[{'grid_id': 'lights', 'position_id': 0}], cable_start=100)
+        self.call('draft', layout)
+        with self.assertRaises(main.HTTPException) as error:
+            self.call('activate', layout)
+        self.assertIn('Finish the cable path', error.exception.detail)
+        data = asyncio.run(main.led_mapping_data(self.wallid))
+        restored = data['layout']
+        self.assertEqual(restored['cable_path'], layout['cable_path'])
+        restored['cable_path'] += [{'grid_id': 'lights', 'position_id': i} for i in range(1, 8)]
+        self.call('activate', restored)
+        self.assertEqual(self.stored()['led_layout']['cable_path'], restored['cable_path'])
+
+    def test_derive_and_embedded_grip_editor_never_fetch_crux_or_change_settings(self):
+        before = self.stored()
+        with patch.object(main.requests, 'get', side_effect=AssertionError('No external calls')):
+            page = asyncio.run(main.grip_geometry_editor(self.wallid)).body.decode()
+            derived = asyncio.run(main.derive_led_positions(main.DeriveLEDRequest(wallid=self.wallid, grid_id='grips', mode='below')))
+        self.assertIn('1 · Griffpositionen', page)
+        self.assertIn('crux-grips-saved', page)
+        self.assertEqual(derived['grid']['points'][0]['y'], 150)
+        self.assertEqual(self.stored(), before)
